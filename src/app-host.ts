@@ -357,7 +357,16 @@ export interface WeldallAppHostClientOptions {
   /** The app host's own resource identifier, sent with every request. */
   resource: string;
   fetch?: typeof globalThis.fetch;
+  /** Bound of each request to Weldall (default {@link WELDALL_REQUEST_TIMEOUT_MS}). */
+  timeoutMs?: number;
 }
+
+/**
+ * Each request to Weldall gives up after this long, like the Git host requests: callers report
+ * audit events while holding a registry row lock, which must not wait indefinitely. A timeout
+ * counts as Weldall unreachable (retried once by the audit reporter).
+ */
+export const WELDALL_REQUEST_TIMEOUT_MS = 15_000;
 
 type WithoutResource<T> = T extends unknown ? Omit<T, "resource"> : never;
 
@@ -368,7 +377,15 @@ type WithoutResource<T> = T extends unknown ? Omit<T, "resource"> : never;
  */
 export function createWeldallAppHostClient(options: WeldallAppHostClientOptions) {
   const issuer = new URL(options.issuer).origin;
-  const fetcher = options.fetch ?? globalThis.fetch;
+  const unbounded = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? WELDALL_REQUEST_TIMEOUT_MS;
+  const fetcher: typeof globalThis.fetch = (input, init) =>
+    unbounded(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
+    });
   const tokens = new Map<string, { accessToken: string; renewAt: number }>();
 
   async function token(scope: string): Promise<string> {

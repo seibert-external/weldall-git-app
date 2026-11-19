@@ -194,3 +194,25 @@ describe("app host contract", () => {
     ).toBe(false);
   });
 });
+
+describe("app host client timeout", () => {
+  it("gives up on a Weldall that does not answer", async () => {
+    const key = await generateEs256KeyPair();
+    const client = createWeldallAppHostClient({
+      issuer,
+      clientId: "git-app-machine",
+      kid: "machine-1",
+      key,
+      resource,
+      timeoutMs: 50,
+      // Never answers; only the abort signal ends the request.
+      fetch: (_input, init) =>
+        new Promise((_resolve, reject) =>
+          init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)),
+        ),
+    });
+    const started = Date.now();
+    await expect(client.checkSubjectScopes("user-1", ["weldall:login"])).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});
