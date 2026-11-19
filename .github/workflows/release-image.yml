@@ -28,7 +28,9 @@ on:
         type: boolean
 
 concurrency:
-  group: release-image-${{ github.event.release.tag_name || inputs.tag }}
+  # One release at a time: the floating-tag plan is made before the approval wait, so two
+  # pending releases must not run side by side.
+  group: release-image
   cancel-in-progress: false
 
 permissions:

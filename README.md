@@ -272,6 +272,7 @@ What a repository administrator sets up once, before the first release (nothing 
 - **Environment `release`** (Settings, Environments) with **required reviewers**, and preferably "Prevent self-review" and deployment refs limited to `main` and tags `v*`. Without required reviewers anyone with write access could publish an image.
 - **Environment secrets** in `release` (not repository secrets): `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, the same names and the same `seibertgroup` organisation access token Weldall's image release uses.
 - **Docker Hub**: the repository `seibertgroup/weldall-git-app` exists, is **public** (the floating-tag plan reads its public tag list; a private repository looks empty and would let tags move backwards), and the token may push to it.
+- **Branch and tag protection**: protect `main` (pull request with review) and add a tag ruleset that restricts creating, updating and deleting `v*`. Otherwise "the tag is on `main`" only means someone with write access pushed it, and the environment reviewer is the only gate.
 
 ## Not built yet
 
