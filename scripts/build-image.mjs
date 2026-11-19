@@ -6,7 +6,8 @@
 //
 // Writes <out>/index.mjs and <out>/THIRD_PARTY_NOTICES. Run after `pnpm install`.
 // Fails when a bundled package has no license file, so the image never ships code without its
-// notice.
+// notice. The one exception is listed in DECLARED_LICENSES below: a package that declares its
+// license only in package.json, whose canonical text is then written instead.
 
 import { build } from "esbuild";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
@@ -16,6 +17,40 @@ import { fileURLToPath } from "node:url";
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDirectory = resolve(appRoot, process.argv[2] ?? "dist/image");
 const licenseName = /^(?:licen[cs]e|copying|notice)(?:[._-].*)?$/i;
+
+/**
+ * Packages shipped without a license file whose package.json names the license: name → SPDX id
+ * and the license's canonical text. Only exact matches count; any other package without a file
+ * still fails the build.
+ */
+const DECLARED_LICENSES = new Map([
+  [
+    // postgres.js (the registry's database driver) is released into the public domain.
+    "postgres",
+    {
+      spdx: "Unlicense",
+      text: `This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this software, either
+in source code form or as a compiled binary, for any purpose, commercial or non-commercial, and by
+any means.
+
+In jurisdictions that recognize copyright laws, the author or authors of this software dedicate
+any and all copyright interest in the software to the public domain. We make this dedication for
+the benefit of the public at large and to the detriment of our heirs and successors. We intend
+this dedication to be an overt act of relinquishment in perpetuity of all present and future
+rights to this software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org/>`,
+    },
+  ],
+]);
 
 const result = await build({
   absWorkingDir: appRoot,
@@ -60,12 +95,16 @@ for (const input of Object.keys(result.metafile.inputs)) {
 const sections = [];
 for (const [id, { directory, json }] of [...packages].sort(([a], [b]) => a.localeCompare(b))) {
   const files = (await readdir(directory)).filter((name) => licenseName.test(name)).sort();
-  if (files.length === 0) throw new Error(`Bundled package ${id} has no license file`);
-  const texts = await Promise.all(
-    files.map(async (name) =>
-      (await readFile(join(directory, name), "utf8")).replace(/\r\n?/g, "\n").trim(),
-    ),
-  );
+  const declared = DECLARED_LICENSES.get(json.name);
+  let texts;
+  if (files.length > 0)
+    texts = await Promise.all(
+      files.map(async (name) =>
+        (await readFile(join(directory, name), "utf8")).replace(/\r\n?/g, "\n").trim(),
+      ),
+    );
+  else if (declared && json.license === declared.spdx) texts = [declared.text];
+  else throw new Error(`Bundled package ${id} has no license file`);
   sections.push(
     `${id}\nLicense: ${typeof json.license === "string" ? json.license : "see below"}\n\n${texts.join("\n\n")}`,
   );
