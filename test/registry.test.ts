@@ -285,3 +285,22 @@ describe("failures", () => {
     });
   });
 });
+
+describe("logging", () => {
+  it("logs a failed query by error name and code only", async () => {
+    const logs: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+    const logged = createAppRegistry({
+      sql: database.sql,
+      log: (_level, message, fields) => void logs.push({ message, ...(fields ? { fields } : {}) }),
+    });
+    await database.sql`DROP TABLE apps`;
+    await expect(logged.byId("app_1")).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(logs).toEqual([
+      {
+        message: "registry query failed",
+        fields: { errorName: "PostgresError", errorCode: "42P01" },
+      },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain(testDatabaseUrl());
+  });
+});

@@ -6,6 +6,7 @@ import {
   openDatabase,
   type Database,
 } from "./registry/database.js";
+import { jsonLogger } from "./log.js";
 import { createAppRegistry } from "./registry/registry.js";
 
 type Env = Parameters<typeof loadConfig>[0];
@@ -59,7 +60,10 @@ export async function prepareGitApp(
     return {
       config,
       database,
-      app: createGitApp({ config, registry: createAppRegistry({ sql: database }) }),
+      app: createGitApp({
+        config,
+        registry: createAppRegistry({ sql: database, log: jsonLogger }),
+      }),
     };
   } catch {
     await database.end({ timeout: 1 }).catch(() => {});

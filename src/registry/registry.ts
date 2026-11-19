@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type postgres from "postgres";
 import { GitAppError } from "../errors.js";
+import { errorForLog, jsonLogger, type Logger } from "../log.js";
 import type { Database } from "./database.js";
 import { appState, reverificationExpiry, stateBounds, type AppState } from "./state.js";
 
@@ -122,8 +123,11 @@ export const ADMIN_PAGE_SIZE = { default: 50, maximum: 200 } as const;
 export function createAppRegistry({
   sql,
   now = () => new Date(),
+  log = jsonLogger,
 }: {
   sql: Database;
+  /** Where failed queries are logged (error name and code only, never the URL or a value). */
+  log?: Logger;
   /** The clock (tests). Timestamps are written from here, in milliseconds. */
   now?: () => Date;
 }) {
@@ -156,6 +160,7 @@ export function createAppRegistry({
       return await step();
     } catch (error) {
       if (error instanceof GitAppError) throw error;
+      log("error", "registry query failed", errorForLog(error));
       throw registryUnavailable(error);
     }
   }

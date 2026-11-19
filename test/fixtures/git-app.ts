@@ -106,7 +106,7 @@ export async function createTestGitApp(
   const holders = options.people ?? people;
   let weldall: FakeWeldall = createFakeWeldall({ resource: GIT_APP_RESOURCE, people: holders });
   let database = await createTestDatabase();
-  let registry: AppRegistry = createAppRegistry({ sql: database.sql });
+  let registry: AppRegistry = createAppRegistry({ sql: database.sql, log });
   /** Registry methods the services called, in order, and errors queued for the next calls. */
   const registryCalls: Array<keyof AppRegistry> = [];
   const registryFailures = new Map<keyof AppRegistry, unknown[]>();
@@ -301,7 +301,7 @@ export async function createTestGitApp(
     async reset(next: { gitProxy?: CreateGitAppOptions["gitProxy"] } = {}) {
       await database.close();
       database = await createTestDatabase();
-      registry = createAppRegistry({ sql: database.sql });
+      registry = createAppRegistry({ sql: database.sql, log });
       weldall = createFakeWeldall({ resource: GIT_APP_RESOURCE, people: holders });
       gitProxy = next.gitProxy ?? options.gitProxy;
       app = build();
