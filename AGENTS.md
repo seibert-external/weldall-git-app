@@ -1,0 +1,18 @@
+# Project agent memory
+
+This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
+
+- The service, its configuration, API and image are described in `README.md`; scripts in `package.json`. Gates: `pnpm typecheck`, `pnpm test`, `pnpm format:check`, `pnpm image:test` (needs Docker).
+- The Git app serves exactly one Git host per instance (drivers in `src/hosts/`, git proxy in `src/git/`, streamed, limits in `src/git/limits.ts`). Weldall never talks to a Git host, and no host token leaves this service.
+- Every GitHub token is restricted to one repository and operation, except repository creation, which deliberately uses the unrestricted installation token because GitHub refused every narrower one in live tests (`mintRepositoryCreationToken` in `src/hosts/github/tokens.ts`). Do not widen any other token.
+- `src/app-host.ts` is a copy of Weldall's app host contract (`packages/sdk/src/app-host.ts` in seibert-external/weldall, not published with `@weldall/sdk`; scope `weldall:app-host`, the machine client must be allowed for this resource). Weldall is the authority. `test/fixtures/app-host/audit-event-request.json` must stay identical to Weldall's copy; `test/app-host.test.ts` asserts the client sends exactly it. Change both repositories together.
+- `src/redaction.ts` must stay identical in its rule list to Weldall's `apps/weldall/src/server/observability/redaction.ts`. No cross-repository test exists; compare by hand whenever either changes.
+- The Docker image (`Dockerfile`, `scripts/build-image.mjs`, `scripts/test-image.sh`) builds from this repository's root and bundles `@weldall/sdk`, so an SDK bump needs a new image. The bundle script fails when a bundled package has no license file; keep that.
+- This repository is public. Never commit credentials, internal hostnames, real GitHub App or installation IDs, or names of real organisations, repositories or people; tests and docs use `example.com`, `example-apps`/`acme-apps` and generated keys. Fake credentials in tests are assembled at run time so no file holds a string that looks like a real one.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

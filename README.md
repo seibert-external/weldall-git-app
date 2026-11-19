@@ -1,29 +1,32 @@
-# Git app
+# Weldall Git app
 
-The Git app keeps the repositories of people's apps on one Git host (GitHub through a GitHub App, or Forgejo through a bot user). It is a separate service that an organisation registers in Weldall as a resource, secured with `@weldall/sdk` like any other service (see `apps/expenses`). It talks to Weldall through the app host API in `packages/sdk/src/app-host.ts`: the registry, ownership, permission checks and the audit log stay in Weldall; the Git host secret stays in the Git app.
+The Weldall Git app keeps the repositories of people's apps on one Git host (GitHub through a GitHub App, or Forgejo through a bot user). People publish apps with the [Weldall](https://github.com/seibert-external/weldall) CLI or an agent; the Git app creates the repository from a template, hands out short-lived git credentials, proxies git traffic, opens pull requests and reports status. The Git host secret never leaves this service.
+
+It is a separate service that an organisation registers in Weldall as a resource, like any other service (see [Service configuration](https://docs.weldall.ai/service-configuration/) in the Weldall documentation). It is secured with [`@weldall/sdk`](https://www.npmjs.com/package/@weldall/sdk) and talks to Weldall through Weldall's app host API (`/api/app-host/v1`, client in [`src/app-host.ts`](src/app-host.ts)): the registry, ownership, permission checks and the audit log stay in Weldall; the Git host secret stays in the Git app.
 
 Each running instance serves exactly one Git host. Run two instances (two resources) for GitHub and Forgejo.
 
 Status: third part. Repository creation, pull requests, status, links, the set-up checklist, the git credential and the git proxy work against the fake host and fake Weldall in the tests; the git proxy is also tested with the real `git` client against `git http-backend`. The instance publishes [skills](#skills), and the [Docker image](#docker-image) is built, tested and released like the discovery proxy's. On 19 November 2026 it ran against github.com with a test GitHub App, the real CLI code and a local Weldall development server: checklist, repository from a template, git fetch and push through the proxy, refused pushes, pull request, status, sync, registry and audit. See [Not built yet](#not-built-yet) for what is still unverified.
 
-The public documentation for operators and employees is in `apps/docs/src/content/docs/`: `git-app.md` (running and registering), `github-app.md` and `forgejo.md` (the hosts), and `publish-apps.md` (publishing).
+The documentation for operators and employees is part of the Weldall documentation at [docs.weldall.ai](https://docs.weldall.ai/): running and registering the Git app, the GitHub and Forgejo host set-up, and publishing apps.
 
 ## Layout
 
-| Path                                                | What                                                                                                                                                                  |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.ts`                                      | Entry point: loads the configuration (fails fast) and serves on `PORT`.                                                                                               |
-| `src/app.ts`                                        | Hono app: the SDK's authorization server routes, `/health`, the protected API routes.                                                                                 |
-| `src/config.ts`                                     | Environment parsing and validation.                                                                                                                                   |
-| `src/hosts/`                                        | The Git host interface (`git-host.ts`), the drivers `github/` and `forgejo/`, bounded HTTP (`http.ts`) and the factory (`index.ts`).                                  |
-| `src/services/`                                     | One module per endpoint: `create-app.ts`, `pull-requests.ts`, `status.ts`, `checklist.ts`, `git-credentials.ts`, plus `own-app.ts` and the pull request text.         |
-| `src/git/`                                          | The git proxy (`proxy.ts`), signed git credentials (`credentials.ts`), push rules, pkt-line handling, paths and limits.                                               |
-| `src/access.ts`                                     | Current permission check through Weldall (`checkSubjectScopes`).                                                                                                      |
-| `src/skills.ts`                                     | The skills the instance publishes through Weldall's skill discovery.                                                                                                  |
-| `src/audit.ts`                                      | Audit reports to Weldall (`reportAuditEvent`).                                                                                                                        |
-| `src/redaction.ts`, `src/git-text.ts`, `src/log.ts` | Credential redaction, sanitising of host text, and the redacting JSON logger.                                                                                         |
-| `test/fixtures/`                                    | Fake GitHub and Forgejo APIs (replace the global `fetch`), the in-process fake Weldall app host API, and a harness that obtains real access tokens from the instance. |
-| `Dockerfile`, `scripts/`                            | The image (`build-image.mjs` bundles the app and the licence texts of its dependencies) and its black-box test (`test-image.sh`).                                     |
+| Path                                                | What                                                                                                                                                                                                           |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                                      | Entry point: loads the configuration (fails fast) and serves on `PORT`.                                                                                                                                        |
+| `src/app.ts`                                        | Hono app: the SDK's authorization server routes, `/health`, the protected API routes.                                                                                                                          |
+| `src/config.ts`                                     | Environment parsing and validation.                                                                                                                                                                            |
+| `src/hosts/`                                        | The Git host interface (`git-host.ts`), the drivers `github/` and `forgejo/`, bounded HTTP (`http.ts`) and the factory (`index.ts`).                                                                           |
+| `src/services/`                                     | One module per endpoint: `create-app.ts`, `pull-requests.ts`, `status.ts`, `checklist.ts`, `git-credentials.ts`, plus `own-app.ts` and the pull request text.                                                  |
+| `src/git/`                                          | The git proxy (`proxy.ts`), signed git credentials (`credentials.ts`), push rules, pkt-line handling, paths and limits.                                                                                        |
+| `src/app-host.ts`                                   | Client for Weldall's app host API and subject scope check; a copy of Weldall's contract (see [The app host contract](#the-app-host-contract)).                                                                 |
+| `src/access.ts`                                     | Current permission check through Weldall (`checkSubjectScopes`).                                                                                                                                               |
+| `src/skills.ts`                                     | The skills the instance publishes through Weldall's skill discovery.                                                                                                                                           |
+| `src/audit.ts`                                      | Audit reports to Weldall (`reportAuditEvent`).                                                                                                                                                                 |
+| `src/redaction.ts`, `src/git-text.ts`, `src/log.ts` | Credential redaction, sanitising of host text, and the redacting JSON logger.                                                                                                                                  |
+| `test/fixtures/`                                    | Fake GitHub and Forgejo APIs (replace the global `fetch`), the in-process fake Weldall app host API, a harness that obtains real access tokens from the instance, and the shared contract fixture `app-host/`. |
+| `Dockerfile`, `scripts/`                            | The image (`build-image.mjs` bundles the app and the licence texts of its dependencies) and its black-box test (`test-image.sh`).                                                                              |
 
 ## Configuration
 
@@ -103,17 +106,17 @@ The publish skill names only the CLI commands and client tools, never this insta
 
 ## How the CLI finds and trusts this instance
 
-The CLI (`apps/cli/src/git/git-apps.ts`) treats a registered resource as a Git app when it supports `git-app:publish` (or `git-app:admin` for the checklist) and its authorization server is a bare https origin: that origin must therefore be `GIT_APP_PUBLIC_ORIGIN`, the API must be accepted by a request prefix `<origin>/api`, and the git route is `<origin>/git/`. Weldall's registry has no marker for Git apps, so **an instance with other scope names is not found** by `weldall app …`. The first publish picks the only Git app the person may publish with, or the one `--git-app <resource key>` names; the folder records the key. The CLI sends a token or a git credential only to the origin Weldall lists for that key, and refuses a folder whose stored git URL lies anywhere else (also after the instance moved to another origin in Weldall; the error names the new address).
+The Weldall CLI (`apps/cli/src/git/git-apps.ts` in the Weldall repository) treats a registered resource as a Git app when it supports `git-app:publish` (or `git-app:admin` for the checklist) and its authorization server is a bare https origin: that origin must therefore be `GIT_APP_PUBLIC_ORIGIN`, the API must be accepted by a request prefix `<origin>/api`, and the git route is `<origin>/git/`. Weldall's registry has no marker for Git apps, so **an instance with other scope names is not found** by `weldall app …`. The first publish picks the only Git app the person may publish with, or the one `--git-app <resource key>` names; the folder records the key. The CLI sends a token or a git credential only to the origin Weldall lists for that key, and refuses a folder whose stored git URL lies anywhere else (also after the instance moved to another origin in Weldall; the error names the new address).
 
 ## Docker image
 
-`docker.io/seibertgroup/weldall-git-app`, released like the other images: a changeset for `@weldall/git-app` produces the tag `@weldall/git-app@X.Y.Z`, and `.github/workflows/release-docker-images.yml` builds, tests and publishes the image from that tag. An `@weldall/sdk` release also releases a patch of the Git app, because the image bundles the SDK.
+`docker.io/seibertgroup/weldall-git-app`. The image bundles `@weldall/sdk`, so an SDK update needs a new image. This repository has no release workflow yet; images were released from the Weldall repository until the Git app moved here.
 
 The image is `node:24-bookworm-slim` with one bundled file (`/app/index.mjs`, built by `scripts/build-image.mjs` with esbuild) and the licence texts of the bundled packages (`/app/THIRD_PARTY_NOTICES`). It runs as the unprivileged `node` user, listens on `PORT` (default `3002`), checks `/health`, stops on `SIGTERM` (see below), and contains no configuration or secret.
 
 ```sh
-pnpm --filter @weldall/git-app image:build   # weldall-git-app:local, built from the repository root
-pnpm --filter @weldall/git-app image:test    # build, then scripts/test-image.sh
+pnpm image:build   # weldall-git-app:local, built from the repository root
+pnpm image:test    # build, then scripts/test-image.sh (needs docker, curl and node)
 ```
 
 Run it with the configuration from the environment and the secrets from mounted files (one instance per Git host; terminate HTTPS in front of it at the origin in `GIT_APP_PUBLIC_ORIGIN`):
@@ -188,18 +191,35 @@ Every refusal after the credential was verified is reported as `git_push.denied`
 
 An app becomes ready only after its audit entry is stored. If step 5 or 6 fails, the person gets `503` and a repeat resumes and reports again. Step 3 is retried once on a network error or `5xx`. If it still fails, the repository may exist without a registry entry: it is reported as `git_repository.failed` with the repository name (best effort) and logged, it cannot be used (the git proxy will serve only ready apps), and an administrator must delete it. Rejections are reported best effort; when Weldall cannot store one, it is logged.
 
+## The app host contract
+
+Weldall defines the app host API in its own repository (`packages/sdk/src/app-host.ts`); that part is not published with `@weldall/sdk`. [`src/app-host.ts`](src/app-host.ts) is this service's copy of it, and Weldall is the authority: change the copy when Weldall's contract changes. Both repositories check their side against the same example request, [`test/fixtures/app-host/audit-event-request.json`](test/fixtures/app-host/audit-event-request.json): here, `test/app-host.test.ts` asserts that the client sends exactly that body; Weldall keeps an identical copy for the endpoint side. Keep the two copies identical.
+
+The credential redaction rules in [`src/redaction.ts`](src/redaction.ts) are likewise identical to Weldall's `apps/weldall/src/server/observability/redaction.ts`. No test can compare them across repositories, so change both together.
+
 ## Development
 
+Needs Node.js 22.15 or later, pnpm 11 (`corepack enable`), and `git` for the git proxy tests.
+
 ```sh
-pnpm --filter @weldall/git-app test
-pnpm --filter @weldall/git-app typecheck
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm build          # tsc to dist/; `pnpm start` runs it
+pnpm dev            # tsx src/index.ts, configured from the environment
+pnpm format:check
 ```
 
-The tests use no network: the GitHub and Forgejo APIs are fixtures that replace `fetch`, Weldall is an in-process fake that validates every request against the SDK's contract schemas.
+The tests use no network: the GitHub and Forgejo APIs are fixtures that replace `fetch`, Weldall is an in-process fake that validates every request against the contract schemas in `src/app-host.ts`, and the git proxy runs the real `git` client against `git http-backend` on 127.0.0.1.
 
 ## Not built yet
 
+- **CI and release**: this repository has no GitHub Actions workflows yet.
 - **CLI**: switched to this instance (`weldall app publish|sync|status|checklist`, `weldall git-credential`); tested against fakes and in the live run above. The sandbox door for the credential helper (INV-133) does not exist yet.
 - **Docker Hub**: the repository `seibertgroup/weldall-git-app` must exist and be public before the first release (the floating-tag plan reads its public tag list), and the release token must be allowed to push to it.
 - **Shared state**: DPoP proofs are replay-checked in memory, and the transfer and credential limits are per process, so run one replica per instance until a shared store is configured.
 - **Live verification**, still missing: a browser login (the live run used a prepared session), the production build and the Docker image in a deployment, registration through the admin UI or IaC, skill discovery, a reviewer team that really has write access (its answer was simulated) and a real branch rule, checks, commit statuses, deployments and the preview/live links (the test App lacked those permissions), Forgejo, public hosting, the limits under load, and the sandbox.
+
+## License
+
+[Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2), like Weldall.
