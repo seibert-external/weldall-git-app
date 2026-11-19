@@ -236,7 +236,7 @@ One entry, as `GET /api/apps` shows it (administrators and tools also get `owner
 
 ## The app host contract
 
-Weldall defines the app host API in its own repository (`packages/sdk/src/app-host.ts`); that part is not published with `@weldall/sdk`. [`src/app-host.ts`](src/app-host.ts) is this service's copy of it, and Weldall is the authority: change the copy when Weldall's contract changes. Since the registry moved here, the copy is ahead of Weldall's: Weldall keeps no app records, every event that names an app also names its repository, and it adds `git_repository.registered` and `app_confirmation.succeeded`/`.denied`; Weldall's side still has to follow. Both repositories check their side against the same example request, [`test/fixtures/app-host/audit-event-request.json`](test/fixtures/app-host/audit-event-request.json): here, `test/app-host.test.ts` asserts that the client sends exactly that body; Weldall keeps an identical copy for the endpoint side. Keep the two copies identical.
+Weldall defines the app host API in its own repository (`apps/weldall/src/server/app-host/contract.ts`); it is not part of `@weldall/sdk`. [`src/app-host.ts`](src/app-host.ts) is this service's copy of it, and Weldall is the authority: change the copy when Weldall's contract changes. Weldall keeps no app records: every event that names an app also names its repository, and the registry reports `git_repository.registered` and `app_confirmation.succeeded`/`.denied`. Both repositories check their side against the same example request, [`test/fixtures/app-host/audit-event-request.json`](test/fixtures/app-host/audit-event-request.json): here, `test/app-host.test.ts` asserts that the client sends exactly that body; Weldall keeps an identical copy (`apps/weldall/test/fixtures/app-host/audit-event-request.json`) and posts it through its endpoint in a test. Keep the two copies identical.
 
 The credential redaction rules in [`src/redaction.ts`](src/redaction.ts) are likewise identical to Weldall's `apps/weldall/src/server/observability/redaction.ts`. No test can compare them across repositories, so change both together.
 
@@ -276,7 +276,7 @@ What a repository administrator sets up once, before the first release (nothing 
 
 ## Not built yet
 
-- **CLI**: switched to this instance (`weldall app publish|sync|status|checklist`, `weldall git-credential`); tested against fakes and in the live run above. `weldall app list` and `weldall app confirm` still call Weldall's former registry and must move to `GET /api/apps` and `POST /api/apps/{id}/confirm` here. The sandbox door for the credential helper (INV-133) does not exist yet.
+- **CLI**: switched to this instance (`weldall app publish|sync|status|checklist`, `weldall git-credential`); tested against fakes and in the live run above. `weldall app list` and `weldall app confirm` now call `GET /api/apps` and `POST /api/apps/{id}/confirm` here; that switch is tested against fakes only. The sandbox door for the credential helper (INV-133) does not exist yet.
 - **Registry**: no user interface (administrators use the `admin-apps` skill), no notifications to owners of expiring apps, no deletion or owner transfer, and no backup set-up: back up the database like any other.
 - **First release**: none yet; the `release` environment, its secrets and the Docker Hub repository (see [Releases](#releases)) must be set up first.
 - **Shared state**: DPoP proofs are replay-checked in memory, and the transfer and credential limits are per process, so run one replica per instance until a shared store is configured.

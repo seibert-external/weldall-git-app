@@ -73,7 +73,7 @@ describe("app host client", () => {
   });
 });
 
-// Carried over from Weldall's own contract tests (`packages/sdk/test/app-host.test.ts`).
+// Carried over from Weldall's own contract tests (formerly `packages/sdk/test/app-host.test.ts`, now `apps/weldall/test/app-host-contract.test.ts`).
 describe("app host contract", () => {
   const commit = "a".repeat(40);
   const forwarded = {

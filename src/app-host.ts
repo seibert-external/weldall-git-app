@@ -1,10 +1,10 @@
 // Client for Weldall's app host API (`/api/app-host/v1`) and the subject scope check.
 //
 // MIRROR: this file copies the contract that Weldall defines in its repository at
-// `packages/sdk/src/app-host.ts` (https://github.com/seibert-external/weldall), which is not
-// published with `@weldall/sdk`. Weldall is the authority: when its contract changes, change
-// this copy to match, and keep `test/fixtures/app-host/` identical to the fixtures Weldall checks
-// its side of the contract with. `test/app-host.test.ts` asserts that this client sends exactly
+// `apps/weldall/src/server/app-host/contract.ts` (https://github.com/seibert-external/weldall), which is not
+// part of `@weldall/sdk`. Weldall is the authority: when its contract changes, change
+// this copy to match, and keep `test/fixtures/app-host/` identical to Weldall's copy in
+// `apps/weldall/test/fixtures/app-host/`, which its endpoint test accepts. `test/app-host.test.ts` asserts that this client sends exactly
 // the fixture's request.
 import { z } from "zod";
 import {
