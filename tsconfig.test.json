@@ -1,5 +1,5 @@
 {
-  "extends": "@weldall/tsconfig/node.json",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true

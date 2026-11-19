@@ -1,32 +1,39 @@
 {
-  "name": "@weldall/git-app",
+  "name": "weldall-git-app",
   "version": "0.0.0",
+  "description": "Weldall Git app: keeps people's app repositories on one Git host, registered in Weldall as a resource",
   "license": "FSL-1.1-ALv2",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "packageManager": "pnpm@11.15.1",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
-    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "check": "pnpm typecheck && pnpm format:check",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
     "build:image-bundle": "node scripts/build-image.mjs",
-    "image:build": "docker build --file Dockerfile --tag weldall-git-app:local ../..",
+    "image:build": "docker build --file Dockerfile --tag weldall-git-app:local .",
     "image:test": "pnpm image:build && sh scripts/test-image.sh"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.1",
-    "@weldall/sdk": "workspace:*",
-    "hono": "^4.13.5",
-    "zod": "catalog:"
+    "@hono/node-server": "2.1.1",
+    "@weldall/sdk": "0.13.0",
+    "hono": "4.13.5",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "@weldall/tsconfig": "workspace:*",
-    "esbuild": "^0.28.2",
-    "tsx": "^4.23.12",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "22.20.1",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.6",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
   }
 }

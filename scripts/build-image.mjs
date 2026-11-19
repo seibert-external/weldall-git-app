@@ -1,11 +1,10 @@
 // Bundles the Git app into one ES module for the Docker image, plus the license texts of every
 // package that ends up in the bundle. The runtime image then needs Node.js and these two files
-// only: no package manager, no node_modules, and no workspace peer dependencies (a pnpm deploy
-// of this workspace installs the SDK's optional peers, several hundred MB).
+// only: no package manager, no node_modules, and none of the SDK's optional peer dependencies.
 //
 //   node scripts/build-image.mjs [out-directory]   (default dist/image)
 //
-// Writes <out>/index.mjs and <out>/THIRD_PARTY_NOTICES. The @weldall/sdk build (tsc) must exist.
+// Writes <out>/index.mjs and <out>/THIRD_PARTY_NOTICES. Run after `pnpm install`.
 // Fails when a bundled package has no license file, so the image never ships code without its
 // notice.
 
@@ -55,8 +54,6 @@ for (const input of Object.keys(result.metafile.inputs)) {
   if (!input.includes("node_modules")) continue;
   const found = await packageOf(resolve(appRoot, input));
   if (!found) throw new Error(`No package.json for bundled file ${input}`);
-  // Workspace packages (the SDK) are this repository's own code under its license.
-  if (found.json.name.startsWith("@weldall/")) continue;
   packages.set(`${found.json.name}@${found.json.version}`, found);
 }
 

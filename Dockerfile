@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Built from the repository root (the Git app depends on the workspace SDK):
-#   docker build --file apps/git-app/Dockerfile --tag weldall-git-app:local .
-# Configuration and secrets come only from the environment at run time (see apps/git-app/README.md);
+# Built from the repository root:
+#   docker build --file Dockerfile --tag weldall-git-app:local .
+# Configuration and secrets come only from the environment at run time (see README.md);
 # nothing is baked into the image.
 
 FROM node:24-bookworm-slim AS builder
@@ -10,10 +10,12 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable && corepack prepare pnpm@11.15.1 --activate
 WORKDIR /app
-COPY . .
-RUN pnpm install --frozen-lockfile --filter @weldall/git-app...
-RUN pnpm --filter @weldall/sdk build \
-  && pnpm --filter @weldall/git-app exec node scripts/build-image.mjs /out
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY tsconfig.base.json tsconfig.json ./
+COPY scripts ./scripts
+COPY src ./src
+RUN node scripts/build-image.mjs /out
 
 FROM node:24-bookworm-slim AS runner
 ENV NODE_ENV=production
