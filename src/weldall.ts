@@ -1,8 +1,9 @@
-import { WeldallAuthError, type AppHostApp, type WeldallAppHostClient } from "@weldall/sdk";
+import { WeldallAuthError } from "@weldall/sdk";
+import type { AppHostApp, WeldallAppHostClient } from "./app-host.js";
 import { GitAppError } from "./errors.js";
 
 /**
- * The part of Weldall's app host API (`createWeldallAppHostClient` in `@weldall/sdk`) the Git app
+ * The part of Weldall's app host API (`createWeldallAppHostClient` in `./app-host.ts`) the Git app
  * uses. Tests pass an in-process fake implementing the same contract.
  */
 export type AppHostApi = Pick<

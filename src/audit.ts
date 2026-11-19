@@ -3,7 +3,7 @@ import {
   APP_HOST_AUDIT_LIMITS,
   type AppHostAuditEventRequest,
   type AppHostAuditEventResponse,
-} from "@weldall/sdk";
+} from "./app-host.js";
 import { GitAppError } from "./errors.js";
 import { truncateText } from "./git-text.js";
 import { errorForLog, type Logger } from "./log.js";

@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { WeldallAuthError, type AppHostApp } from "@weldall/sdk";
+import { WeldallAuthError } from "@weldall/sdk";
+import { type AppHostApp } from "../src/app-host.js";
 import {
   botIdentity,
   headCommit,

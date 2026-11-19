@@ -1,4 +1,4 @@
-import { appIdSchema } from "@weldall/sdk";
+import { appIdSchema } from "../app-host.js";
 import { authorizePerson } from "../access.js";
 import { auditList } from "../audit.js";
 import { GitAppError } from "../errors.js";

@@ -2,7 +2,6 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { vi } from "vitest";
 import {
   JWT_DPOP_GRANT,
-  LOGIN_SCOPE,
   SKILL_ASSERTION_TYPE,
   createDpopProof,
   generateEs256KeyPair,
@@ -10,6 +9,7 @@ import {
   signEs256,
   type DpopKeyPair,
 } from "@weldall/sdk";
+import { LOGIN_SCOPE } from "../../src/app-host.js";
 import { createGitApp, type CreateGitAppOptions } from "../../src/app.js";
 import { loadConfig, type GitAppConfig } from "../../src/config.js";
 import { openConfiguredHost, type ConfiguredHost } from "../../src/hosts/index.js";

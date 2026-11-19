@@ -1,4 +1,4 @@
-import { appIdSchema, type AppHostApp } from "@weldall/sdk";
+import { appIdSchema, type AppHostApp } from "../app-host.js";
 import { GitAppError } from "../errors.js";
 import { lookupApp } from "../weldall.js";
 import type { GitAppServices, Person } from "./context.js";

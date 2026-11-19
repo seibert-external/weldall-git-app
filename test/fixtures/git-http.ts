@@ -5,7 +5,8 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 
 /**
- * Real git for the git proxy tests (carried over from `apps/weldall/test/fixtures/git-http.ts`):
+ * Real git for the git proxy tests (carried over from Weldall's
+ * `apps/weldall/test/fixtures/git-http.ts`):
  * the system `git`, and `git http-backend` behind a tiny HTTP server as the upstream Git host.
  * Everything listens on 127.0.0.1 only.
  */

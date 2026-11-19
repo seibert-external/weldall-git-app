@@ -72,7 +72,7 @@ const clientId = /^[A-Za-z0-9._:-]{1,128}$/;
 /**
  * An https origin without path or credentials. There is no http exception for loopback: Weldall
  * accepts only an https issuer, the CLI finds a Git app only at an https origin, and the SDK would
- * refuse http at start. Local development uses https, as `apps/expenses` does.
+ * refuse http at start. Local development uses https, as Weldall's example app `apps/expenses` does.
  */
 function originProblem(value: string): string | null {
   let url: URL;

@@ -6,7 +6,7 @@ import { GIT_PUBLISH_BRANCH_PREFIX, isPublishBranch } from "../publish-branches.
 import type { GitAppServices, Person } from "./context.js";
 import { resolveOwnApp } from "./own-app.js";
 import { pullRequestBody, pullRequestTitle } from "./pull-request-body.js";
-import type { AppHostApp } from "@weldall/sdk";
+import type { AppHostApp } from "../app-host.js";
 
 export interface OpenPullRequestInput {
   /** Branch under {@link GIT_PUBLISH_BRANCH_PREFIX} that the person pushed through the git proxy. */

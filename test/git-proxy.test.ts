@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createAdaptorServer } from "@hono/node-server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { LOGIN_SCOPE, type AppHostApp } from "@weldall/sdk";
+import { LOGIN_SCOPE, type AppHostApp } from "../src/app-host.js";
 import { createGitCredentialSigner } from "../src/git/credentials.js";
 import { createTransferLimiter, GIT_PROXY_LIMITS } from "../src/git/limits.js";
 import { pktLine } from "../src/git/pkt-line.js";

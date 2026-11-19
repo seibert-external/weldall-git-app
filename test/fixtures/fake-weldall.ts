@@ -1,18 +1,18 @@
+import { WeldallAuthError } from "@weldall/sdk";
 import {
   LOGIN_SCOPE,
-  WeldallAuthError,
   appHostAuditEventRequestSchema,
   appHostCreateAppRequestSchema,
   appHostLookupRequestSchema,
   appHostUpdateAppRequestSchema,
   type AppHostApp,
   type AppHostAuditEventRequest,
-} from "@weldall/sdk";
+} from "../../src/app-host.js";
 import type { AppHostApi } from "../../src/weldall.js";
 
 /**
  * In-process fake of Weldall's app host API, implementing the contract in
- * `packages/sdk/src/app-host.ts`: every request is validated against the SDK's request schemas
+ * `src/app-host.ts`: every request is validated against the contract's request schemas
  * (with the resource added, as the real client does), registry and audit rules follow the
  * contract header, and every call is recorded. No network.
  */
@@ -166,7 +166,8 @@ export function createFakeWeldall({
     },
     async checkSubjectScopes(subject, scopes) {
       record("checkSubjectScopes", { subject, scopes });
-      // As `apps/weldall/src/server/oauth/subject-scopes-api.ts`: an unknown user is 404 not_found.
+      // As Weldall's subject scope check (`apps/weldall/src/server/oauth/subject-scopes-api.ts` in
+      // the Weldall repository): an unknown user is 404 not_found.
       if (!(subject in people))
         throw new WeldallAuthError("not_found", "subject was not found", 404);
       const held = people[subject]!;

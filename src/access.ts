@@ -1,4 +1,4 @@
-import { LOGIN_SCOPE } from "@weldall/sdk";
+import { LOGIN_SCOPE } from "./app-host.js";
 import { GitAppError } from "./errors.js";
 import { weldallCode, weldallFailure, type AppHostApi } from "./weldall.js";
 

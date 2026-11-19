@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { createWeldallAppHostClient, inMemory, type AuthContext } from "@weldall/sdk";
+import { inMemory, type AuthContext } from "@weldall/sdk";
+import { createWeldallAppHostClient } from "./app-host.js";
 import { initWeldall, type WeldallVariables } from "@weldall/sdk/hono";
 import { authorizePerson } from "./access.js";
 import { createAuditReporter } from "./audit.js";

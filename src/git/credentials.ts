@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { appIdSchema, repositoryPartSchema, weldallSubjectSchema } from "@weldall/sdk";
+import { appIdSchema, repositoryPartSchema, weldallSubjectSchema } from "../app-host.js";
 import { WELDALL_GIT_CREDENTIAL_PREFIX, type GitAccess } from "../hosts/git-host.js";
 
 /**

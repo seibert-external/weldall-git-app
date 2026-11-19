@@ -1,3 +1,8 @@
+// MIRROR: the rule list (`credentialRules`) must stay identical to Weldall's
+// `apps/weldall/src/server/observability/redaction.ts` (https://github.com/seibert-external/weldall),
+// which carries the same note pointing here. Both services redact the text the Git app reports to
+// Weldall's audit log; a rule added on one side only leaks on the other. No test can compare the
+// two files across repositories: change both in the same piece of work and compare by hand.
 import { WELDALL_GIT_CREDENTIAL_PREFIX } from "./hosts/git-host.js";
 
 /** Replacement for a redacted credential; the same placeholder the logger uses for masked keys. */

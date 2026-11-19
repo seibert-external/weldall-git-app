@@ -1,4 +1,4 @@
-import type { AppHostApp } from "@weldall/sdk";
+import type { AppHostApp } from "../app-host.js";
 import { authorizePerson } from "../access.js";
 import { auditList, type AuditRejection, type AuditReport } from "../audit.js";
 import { GitAppError } from "../errors.js";
