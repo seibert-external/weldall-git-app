@@ -1,23 +1,29 @@
 #!/bin/sh
-# Black-box test of a built Git app image with a throwaway configuration: the Docker
-# HEALTHCHECK turns healthy, /health answers, the authorization server and the skill
-# catalog are announced, protected routes demand a token, the process runs unprivileged,
-# a stop signal ends it promptly, secrets read from *_FILE mounts work, a missing or
-# invalid configuration stops the container with an error that names the variables, and
-# no secret value ever appears in the container's output. Needs docker, curl and node.
+# Black-box test of a built Git app image with a throwaway configuration and a throwaway
+# PostgreSQL for the app registry: the Docker HEALTHCHECK turns healthy, /health answers,
+# the registry's migrations ran, the authorization server and the skill catalog are
+# announced, protected routes demand a token, the process runs unprivileged, a stop signal
+# ends it promptly, secrets read from *_FILE mounts work, a missing or invalid
+# configuration or an unreachable database stops the container with an error that names
+# the variables, and no secret value ever appears in the container's output. Needs docker,
+# curl and node.
 #
 #   sh scripts/test-image.sh [image]
 set -eu
 
 image=${1:-weldall-git-app:local}
+database_image=${GIT_APP_TEST_DATABASE_IMAGE:-postgres:17-alpine}
 suffix=$$
 origin=https://git-app.image-test.invalid
 workdir=$(mktemp -d)
+network=weldall-git-app-image-test-$suffix
+database=weldall-git-app-image-test-db-$suffix
 container=
 negative=
 
 cleanup() {
-  docker rm --force $container $negative >/dev/null 2>&1 || true
+  docker rm --force $container $negative $database >/dev/null 2>&1 || true
+  docker network rm $network >/dev/null 2>&1 || true
   rm -rf "$workdir"
 }
 trap cleanup EXIT INT TERM
@@ -31,7 +37,7 @@ fail() {
 # pnpm install). Secrets that fit on one line go into an env file; the GitHub App key is a
 # multi-line PEM and goes into a file mounted for GIT_APP_HOST_SECRET_FILE. secrets.txt holds
 # every secret value, one per line, for the leak check. Everything is deleted on exit.
-node - "$workdir" "$origin" <<'EOF'
+DATABASE_HOST="$database" node - "$workdir" "$origin" <<'EOF'
 const { generateKeyPairSync, randomBytes } = require("node:crypto");
 const { writeFileSync } = require("node:fs");
 const [dir, origin] = process.argv.slice(2);
@@ -51,6 +57,7 @@ const githubKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
 });
 const credentialKey = randomBytes(32).toString("base64");
 const forgejoToken = randomBytes(20).toString("hex");
+const databasePassword = randomBytes(18).toString("hex");
 const common = {
   GIT_APP_PUBLIC_ORIGIN: origin,
   GIT_APP_DOWNSTREAM_CLIENT_ID: "weldall-cli-at-git-app",
@@ -63,11 +70,23 @@ const common = {
   WELDALL_MACHINE_KID: "image-test-machine",
   WELDALL_MACHINE_PRIVATE_JWK: machine.privateJwk,
   WELDALL_MACHINE_PUBLIC_JWK: machine.publicJwk,
+  GIT_APP_DATABASE_URL: `postgres://postgres:${databasePassword}@${process.env.DATABASE_HOST}:5432/postgres`,
 };
 const envFile = (values) =>
   Object.entries(values).map(([key, value]) => `${key}=${value}`).join("\n") + "\n";
 writeFileSync(`${dir}/common.env`, envFile(common), { mode: 0o600 });
 writeFileSync(`${dir}/forgejo.env`, envFile({ GIT_APP_HOST_SECRET: forgejoToken }), { mode: 0o600 });
+writeFileSync(`${dir}/database.env`, envFile({ POSTGRES_PASSWORD: databasePassword }), {
+  mode: 0o600,
+});
+// The same server under a name nothing resolves, for the unreachable-database case.
+writeFileSync(
+  `${dir}/unreachable.env`,
+  envFile({
+    GIT_APP_DATABASE_URL: `postgres://postgres:${databasePassword}@db.image-test.invalid:5432/postgres`,
+  }),
+  { mode: 0o600 },
+);
 writeFileSync(`${dir}/github-key.pem`, githubKey);
 writeFileSync(
   `${dir}/github.json`,
@@ -94,13 +113,27 @@ writeFileSync(
   }),
 );
 // Distinctive fragments of every secret: the PEM's base64 body lines, the private JWKs' d,
-// the credential key and the Forgejo token.
+// the credential key, the Forgejo token and the database password.
 const pemLines = githubKey.split("\n").filter((line) => line.length > 40);
 writeFileSync(
   `${dir}/secrets.txt`,
-  [...pemLines, signing.d, machine.d, credentialKey, forgejoToken].join("\n") + "\n",
+  [...pemLines, signing.d, machine.d, credentialKey, forgejoToken, databasePassword].join("\n") +
+    "\n",
 );
 EOF
+# The registry's database: a throwaway PostgreSQL on a private network, never published.
+docker network create "$network" >/dev/null
+docker run --detach --name "$database" --network "$network" \
+  --env-file "$workdir/database.env" --tmpfs /var/lib/postgresql/data \
+  "$database_image" >/dev/null
+attempt=0
+until docker exec "$database" pg_isready --username postgres --quiet >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 60 ] || { docker logs "$database" >&2; fail "PostgreSQL never became ready"; }
+  sleep 1
+done
+echo "PostgreSQL for the registry is ready"
+
 # The container runs as the image's unprivileged user and reads the mounted files; on Linux
 # a bind mount keeps host permissions, and mktemp -d creates a 0700 directory.
 mkdir "$workdir/mount"
@@ -135,6 +168,7 @@ wait_for_healthy() {
 # --- 1. A GitHub instance with secrets and host configuration from mounted files ------
 # The HEALTHCHECK's first probe runs after --health-interval; shorten it for the test only.
 container=$(docker run --detach --publish 127.0.0.1::3002 \
+  --network "$network" \
   --health-interval 1s \
   --env-file "$workdir/common.env" \
   --env GIT_APP_HOST=github \
@@ -168,10 +202,18 @@ status=$(curl --silent --output /dev/null --write-out '%{http_code}' "$base/.wel
 [ "$status" = 401 ] || fail "skill catalog without Weldall's assertion answered $status"
 status=$(curl --silent --output /dev/null --write-out '%{http_code}' "$base/api/admin/checklist")
 [ "$status" = 401 ] || fail "protected API without a token answered $status"
+status=$(curl --silent --output /dev/null --write-out '%{http_code}' "$base/api/registry/apps")
+[ "$status" = 401 ] || fail "registry API without a token answered $status"
 status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
   "$base/git/example-apps/app-demo.git/info/refs?service=git-upload-pack")
 [ "$status" = 401 ] || fail "git route without a credential answered $status"
 echo "Skill catalog, API and git route refuse unauthenticated requests"
+
+migrated=$(docker exec "$database" psql --username postgres --tuples-only --no-align \
+  --command "SELECT count(*) FROM schema_migrations; SELECT count(*) FROM apps")
+[ "$(echo "$migrated" | head -n 1)" -ge 1 ] && [ "$(echo "$migrated" | tail -n 1)" = 0 ] ||
+  fail "the registry's migrations did not run: $migrated"
+echo "The registry's migrations ran at start"
 
 uid=$(docker exec "$container" id -u)
 [ "$uid" != 0 ] || fail "process runs as root"
@@ -192,6 +234,7 @@ container=
 
 # --- 2. A Forgejo instance with every secret from the environment -------------------
 container=$(docker run --detach --publish 127.0.0.1::3002 \
+  --network "$network" \
   --health-interval 1s \
   --env-file "$workdir/common.env" \
   --env-file "$workdir/forgejo.env" \
@@ -230,7 +273,7 @@ assert_rejected() {
   echo "$label: container exited with $code and named $EXPECTED"
 }
 
-EXPECTED="GIT_APP_HOST GIT_APP_PUBLIC_ORIGIN WELDALL_ISSUER GIT_APP_GIT_CREDENTIAL_KEY" \
+EXPECTED="GIT_APP_HOST GIT_APP_PUBLIC_ORIGIN WELDALL_ISSUER GIT_APP_GIT_CREDENTIAL_KEY GIT_APP_DATABASE_URL" \
   assert_rejected "missing configuration"
 
 # Every secret is present, but the origin, host and credential key are wrong; the
@@ -255,5 +298,32 @@ EXPECTED="GIT_APP_HOST_SECRET" \
   --env GIT_APP_HOST_CONFIG_FILE=/run/git-app/forgejo.json \
   --env GIT_APP_HOST_SECRET="$malformed" \
   --volume "$workdir/mount:/run/git-app:ro"
+
+# A database that cannot be reached stops the container too, naming the variable only.
+negative=$(docker run --detach --network "$network" \
+  --env-file "$workdir/common.env" \
+  --env-file "$workdir/forgejo.env" \
+  --env-file "$workdir/unreachable.env" \
+  --env GIT_APP_HOST=forgejo \
+  --env GIT_APP_HOST_CONFIG_FILE=/run/git-app/forgejo.json \
+  --volume "$workdir/mount:/run/git-app:ro" \
+  "$image")
+attempt=0
+while [ "$(docker inspect --format '{{.State.Status}}' "$negative")" = running ]; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 80 ] || { docker logs "$negative" >&2; fail "unreachable database: container kept running"; }
+  sleep 0.25
+done
+code=$(docker inspect --format '{{.State.ExitCode}}' "$negative")
+[ "$code" != 0 ] || fail "unreachable database: container exited with 0"
+docker logs "$negative" >"$workdir/logs" 2>&1
+grep -q "app registry database (GIT_APP_DATABASE_URL) could not be reached" "$workdir/logs" ||
+  { cat "$workdir/logs" >&2; fail "unreachable database: no database error in the output"; }
+if grep -q "Git app listening" "$workdir/logs"; then fail "unreachable database: the server started"; fi
+if grep -q "db.image-test.invalid" "$workdir/logs"; then fail "unreachable database: the URL was printed"; fi
+assert_no_secrets "$negative" "unreachable database"
+docker rm --force "$negative" >/dev/null
+negative=
+echo "unreachable database: container exited with $code and named GIT_APP_DATABASE_URL only"
 
 echo "git app image tests passed"
