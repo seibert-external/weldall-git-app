@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Supersede older PR runs without interrupting main's validation.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Typecheck, format, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # The app registry's tests (test/setup/database.ts uses GIT_APP_TEST_DATABASE_URL
+      # instead of starting its own container). Throwaway credentials on a runner that is
+      # discarded after the job.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: git_app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      GIT_APP_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/git_app_test
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # Every test instance opens its own small pool in its own schema; the local test
+      # container runs with max_connections=500 for the same reason. A service container
+      # takes no server arguments, so raise the limit and restart it.
+      - name: Raise the test PostgreSQL connection limit
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" psql --username postgres --command "ALTER SYSTEM SET max_connections = 500"
+          docker restart "$POSTGRES_CONTAINER" >/dev/null
+          attempt=0
+          until docker exec "$POSTGRES_CONTAINER" pg_isready --username postgres --quiet; do
+            attempt=$((attempt + 1))
+            [ "$attempt" -lt 60 ] || { echo "PostgreSQL did not come back" >&2; exit 1; }
+            sleep 1
+          done
+          docker exec "$POSTGRES_CONTAINER" psql --username postgres --tuples-only --command "SHOW max_connections"
+      - name: Show git version
+        run: git --version
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+      - name: Assert validation left no repository debris
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  # Builds the production image and runs the same black-box test as release-image.yml, so
+  # a broken Dockerfile or entrypoint fails the pull request instead of the first release.
+  # The test needs only docker, curl and node, so this job installs no dependencies.
+  image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Build the image
+        run: docker build --file Dockerfile --tag weldall-git-app:local .
+      - name: Test the image
+        run: sh scripts/test-image.sh weldall-git-app:local

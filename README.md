@@ -6,7 +6,7 @@ It is a separate service that an organisation registers in Weldall as a resource
 
 Each running instance serves exactly one Git host. Run two instances (two resources) for GitHub and Forgejo.
 
-Status: third part. Repository creation, pull requests, status, links, the set-up checklist, the app registry, the git credential and the git proxy work against the fake host, fake Weldall and a real PostgreSQL in the tests; the git proxy is also tested with the real `git` client against `git http-backend`. The instance publishes [skills](#skills), and the [Docker image](#docker-image) is built and tested here; releases are not set up in this repository yet. On 19 November 2026 it ran against github.com with a test GitHub App, the real CLI code and a local Weldall development server: checklist, repository from a template, git fetch and push through the proxy, refused pushes, pull request, status, sync, registry and audit (then with the registry still in Weldall). See [Not built yet](#not-built-yet) for what is still unverified.
+Status: third part. Repository creation, pull requests, status, links, the set-up checklist, the app registry, the git credential and the git proxy work against the fake host, fake Weldall and a real PostgreSQL in the tests; the git proxy is also tested with the real `git` client against `git http-backend`. The instance publishes [skills](#skills), and the [Docker image](#docker-image) is built, tested and [released](#releases) here. On 19 November 2026 it ran against github.com with a test GitHub App, the real CLI code and a local Weldall development server: checklist, repository from a template, git fetch and push through the proxy, refused pushes, pull request, status, sync, registry and audit (then with the registry still in Weldall). See [Not built yet](#not-built-yet) for what is still unverified.
 
 The documentation for operators and employees is part of the Weldall documentation at [docs.weldall.ai](https://docs.weldall.ai/): running and registering the Git app, the GitHub and Forgejo host set-up, and publishing apps.
 
@@ -28,7 +28,8 @@ The documentation for operators and employees is part of the Weldall documentati
 | `src/redaction.ts`, `src/git-text.ts`, `src/log.ts` | Credential redaction, sanitising of host text, and the redacting JSON logger.                                                                                                                                  |
 | `test/fixtures/`                                    | Fake GitHub and Forgejo APIs (replace the global `fetch`), the in-process fake Weldall app host API, a harness that obtains real access tokens from the instance, and the shared contract fixture `app-host/`. |
 | `test/setup/database.ts`                            | Starts the throwaway PostgreSQL the tests use (see [Development](#development)).                                                                                                                               |
-| `Dockerfile`, `scripts/`                            | The image (`build-image.mjs` bundles the app and the licence texts of its dependencies) and its black-box test (`test-image.sh`).                                                                              |
+| `Dockerfile`, `scripts/`                            | The image (`build-image.mjs` bundles the app and the licence texts of its dependencies), its black-box test (`test-image.sh`) and the release helper (`image-release.mjs`).                                    |
+| `.github/workflows/`                                | CI (`ci.yml`) and the image release (`release-image.yml`, see [Releases](#releases)).                                                                                                                          |
 
 ## Configuration
 
@@ -116,7 +117,7 @@ The Weldall CLI (`apps/cli/src/git/git-apps.ts` in the Weldall repository) treat
 
 ## Docker image
 
-`docker.io/seibertgroup/weldall-git-app`. The image bundles `@weldall/sdk`, so an SDK update needs a new image. This repository has no release workflow yet; images were released from the Weldall repository until the Git app moved here.
+`docker.io/seibertgroup/weldall-git-app`. The image bundles `@weldall/sdk`, so an SDK update needs a new image. Tags and the release procedure: [Releases](#releases).
 
 The image is `node:24-bookworm-slim` with one bundled file (`/app/index.mjs`, built by `scripts/build-image.mjs` with esbuild) and the licence texts of the bundled packages (`/app/THIRD_PARTY_NOTICES`). It runs as the unprivileged `node` user, listens on `PORT` (default `3002`), checks `/health`, stops on `SIGTERM` (see below), and contains no configuration or secret.
 
@@ -254,12 +255,29 @@ pnpm format:check
 
 The tests use no external network: the GitHub and Forgejo APIs are fixtures that replace `fetch`, Weldall is an in-process fake that validates every request against the contract schemas in `src/app-host.ts`, and the git proxy runs the real `git` client against `git http-backend` on 127.0.0.1. The registry runs against a real PostgreSQL: `pnpm test` starts a throwaway `postgres:17-alpine` container (`weldall-git-app-test-db-<pid>`, loopback only, data in tmpfs) and removes it at the end; every test instance gets its own schema. Set `GIT_APP_TEST_DATABASE_URL` to use a server you run yourself (CI), and `GIT_APP_TEST_DATABASE_IMAGE` for another image.
 
+CI (`.github/workflows/ci.yml`) runs on every pull request and push to `main`: frozen install, `pnpm typecheck`, `pnpm format:check`, `pnpm test` against a PostgreSQL service container, `pnpm build`, and the image build plus `scripts/test-image.sh`.
+
+## Releases
+
+`.github/workflows/release-image.yml` publishes `docker.io/seibertgroup/weldall-git-app` for `linux/amd64`. The version lives in `package.json`; the release tag is exactly `v<version>`.
+
+1. On `main`, raise `version` in `package.json` (SemVer) and merge.
+2. Publish a GitHub release with the tag `vX.Y.Z` on that commit. A tag that is not on `main` or does not match `package.json` fails before anything is built.
+3. The workflow builds the image once, checks its platform, entrypoint and OCI labels, runs `scripts/test-image.sh`, and waits for a reviewer to approve the `release` environment. Only then does it push `<commit SHA>`, verify that tag is the tested image, and move `X.Y.Z`, `X.Y`, `X` and `latest` onto it. Floating tags only move forward: a patch to an older line never moves `latest` or a newer line's tags back.
+
+A manual run (Actions, "Release Docker image", tag `vX.Y.Z`) builds and tests only; it publishes only with `publish` ticked, and then through the same environment approval.
+
+What a repository administrator sets up once, before the first release (nothing here is created by the workflows):
+
+- **Environment `release`** (Settings, Environments) with **required reviewers**, and preferably "Prevent self-review" and deployment refs limited to `main` and tags `v*`. Without required reviewers anyone with write access could publish an image.
+- **Environment secrets** in `release` (not repository secrets): `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, the same names and the same `seibertgroup` organisation access token Weldall's image release uses.
+- **Docker Hub**: the repository `seibertgroup/weldall-git-app` exists, is **public** (the floating-tag plan reads its public tag list; a private repository looks empty and would let tags move backwards), and the token may push to it.
+
 ## Not built yet
 
-- **CI and release**: this repository has no GitHub Actions workflows yet.
 - **CLI**: switched to this instance (`weldall app publish|sync|status|checklist`, `weldall git-credential`); tested against fakes and in the live run above. `weldall app list` and `weldall app confirm` still call Weldall's former registry and must move to `GET /api/apps` and `POST /api/apps/{id}/confirm` here. The sandbox door for the credential helper (INV-133) does not exist yet.
 - **Registry**: no user interface (administrators use the `admin-apps` skill), no notifications to owners of expiring apps, no deletion or owner transfer, and no backup set-up: back up the database like any other.
-- **Docker Hub**: the repository `seibertgroup/weldall-git-app` must exist and be public before the first release (the floating-tag plan reads its public tag list), and the release token must be allowed to push to it.
+- **First release**: none yet; the `release` environment, its secrets and the Docker Hub repository (see [Releases](#releases)) must be set up first.
 - **Shared state**: DPoP proofs are replay-checked in memory, and the transfer and credential limits are per process, so run one replica per instance until a shared store is configured.
 - **Live verification**, still missing: a browser login (the live run used a prepared session), the production build and the Docker image in a deployment, registration through the admin UI or IaC, skill discovery, a reviewer team that really has write access (its answer was simulated) and a real branch rule, checks, commit statuses, deployments and the preview/live links (the test App lacked those permissions), Forgejo, public hosting, the limits under load, and the sandbox.
 
