@@ -45,12 +45,15 @@ export interface GitAppConfig {
    */
   gitCredentialKeys: Buffer[];
   /** Resource scopes this instance checks. */
-  scopes: { publish: string; admin: string };
+  scopes: { publish: string; admin: string; registryRead: string };
+  /** PostgreSQL connection URL of the app registry; may hold a password. Never logged. */
+  databaseUrl: string;
   port: number;
 }
 
 export const DEFAULT_PUBLISH_SCOPE = "git-app:publish";
 export const DEFAULT_ADMIN_SCOPE = "git-app:admin";
+export const DEFAULT_REGISTRY_READ_SCOPE = "git-app:registry-read";
 export const DEFAULT_PORT = 3002;
 
 /** Failed configuration; the message lists every problem by variable name, never a value. */
@@ -245,9 +248,27 @@ export async function loadConfig(
   const scopes = {
     publish: scope("GIT_APP_PUBLISH_SCOPE", DEFAULT_PUBLISH_SCOPE),
     admin: scope("GIT_APP_ADMIN_SCOPE", DEFAULT_ADMIN_SCOPE),
+    registryRead: scope("GIT_APP_REGISTRY_READ_SCOPE", DEFAULT_REGISTRY_READ_SCOPE),
   };
-  if (scopes.publish === scopes.admin)
-    problems.push("GIT_APP_PUBLISH_SCOPE and GIT_APP_ADMIN_SCOPE must differ.");
+  if (new Set(Object.values(scopes)).size !== 3)
+    problems.push(
+      "GIT_APP_PUBLISH_SCOPE, GIT_APP_ADMIN_SCOPE and GIT_APP_REGISTRY_READ_SCOPE must differ.",
+    );
+
+  // App registry database
+  const databaseValue = secret("GIT_APP_DATABASE_URL");
+  let databaseUrl: string | undefined;
+  if (databaseValue !== undefined)
+    try {
+      const url = new URL(databaseValue.trim());
+      if ((url.protocol !== "postgres:" && url.protocol !== "postgresql:") || !url.hostname)
+        throw new Error();
+      databaseUrl = databaseValue.trim();
+    } catch {
+      problems.push(
+        "GIT_APP_DATABASE_URL must be a PostgreSQL connection URL (postgres://user:password@host:5432/database).",
+      );
+    }
 
   // Git credentials
   const credentialKey = (name: string, required: boolean) => {
@@ -285,6 +306,7 @@ export async function loadConfig(
     !signingKid ||
     !signingPair ||
     !gitCredentialKey ||
+    !databaseUrl ||
     !issuer ||
     !machineClientId ||
     !machineKid ||
@@ -311,6 +333,7 @@ export async function loadConfig(
       },
     },
     scopes,
+    databaseUrl,
     port,
   };
 }

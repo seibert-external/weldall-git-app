@@ -1,6 +1,7 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WeldallAuthError } from "@weldall/sdk";
-import { type AppHostApp } from "../src/app-host.js";
+import { GitAppError } from "../src/errors.js";
+import { registryUnavailable } from "../src/registry/registry.js";
 import {
   botIdentity,
   headCommit,
@@ -25,38 +26,29 @@ beforeAll(async () => {
 });
 beforeEach(() => gitApp.reset());
 afterEach(() => vi.unstubAllGlobals());
+afterAll(() => gitApp.close());
 
 const methods = () => gitApp.weldall.calls.map(({ method }) => method);
 const events = () => gitApp.weldall.events;
 const hostCalls = (github: { calls: { method: string; path: string }[] }) =>
   github.calls.filter(({ path }) => !path.endsWith("/access_tokens"));
 
-/** A ready app of `owner` in the fake registry, as a finished creation leaves it. */
-function seedApp(owner: string, overrides: Partial<AppHostApp> = {}): AppHostApp {
-  const app: AppHostApp = {
-    id: `seed-${owner}`,
-    name: "expenses",
-    purpose: "Tracks team expenses",
-    owner: { id: owner },
-    resource: "git-app",
-    repository: {
-      owner: "acme-apps",
-      name: "app-expenses",
-      id: "4242",
-      webUrl: "https://github.com/acme-apps/app-expenses",
-    },
-    defaultBranch: "main",
-    template: { name: "react", commit: templateCommit },
-    ready: true,
-    links: { preview: null, live: null },
-    createdAt: "2026-11-01T00:00:00.000Z",
-    confirmedAt: null,
-    expiresAt: "2027-05-01T00:00:00.000Z",
-    state: "active",
-    ...overrides,
-  };
-  gitApp.weldall.apps.set(app.id, app);
-  return app;
+const repository = { owner: "acme-apps", name: "app-expenses" };
+const stored = () => gitApp.registry.byRepository(repository);
+
+/** A ready app of `owner` in the registry, as a finished creation leaves it. */
+async function seedApp(
+  owner: string,
+  overrides: { ready?: boolean; links?: { preview: string | null; live: string | null } } = {},
+) {
+  const id = `seed-${owner}`;
+  await gitApp.seed({
+    id,
+    owner,
+    template: { name: "react", commit: overrides.ready === false ? null : templateCommit },
+    ...(overrides.links ? { links: overrides.links } : {}),
+  });
+  return { id };
 }
 
 describe("service", () => {
@@ -83,7 +75,7 @@ describe("service", () => {
 });
 
 describe("POST /api/apps", () => {
-  it("checks Weldall first, creates the repository, registers, audits and only then marks it ready", async () => {
+  it("checks Weldall and the registry first, creates the repository, registers, audits and only then marks it ready", async () => {
     const github = mockGitHub();
     const { status, json } = await gitApp.call("alice", "POST", "/api/apps", { body: create() });
 
@@ -105,30 +97,24 @@ describe("POST /api/apps", () => {
         remoteUrl: `${GIT_APP_ORIGIN}/git/acme-apps/app-expenses.git`,
       },
     });
-    expect(methods()).toEqual([
-      "checkSubjectScopes",
-      "lookupApp",
-      "createApp",
-      "reportAuditEvent",
-      "updateApp",
-    ]);
-    const [scopes, lookup, registered, , ready] = gitApp.weldall.calls.map(({ input }) => input);
+    expect(methods()).toEqual(["checkSubjectScopes", "reportAuditEvent"]);
+    expect(gitApp.registryCalls).toEqual(["byRepository", "register", "markReady"]);
+    const [scopes] = gitApp.weldall.calls.map(({ input }) => input);
     expect(scopes).toEqual({ subject: "alice", scopes: ["weldall:login", PUBLISH_SCOPE] });
-    expect(lookup).toEqual({
-      app: { repositoryOwner: "acme-apps", repositoryName: "app-expenses" },
-      subject: "alice",
+    expect(await stored()).toMatchObject({
+      id: json.app.id,
+      owner: { id: "alice", email: "alice@example.com" },
+      registeredBy: "alice",
+      template: { name: "react", commit: templateCommit },
+      repository: { ...repository, id: "4242" },
+      ready: true,
     });
-    expect(registered).toMatchObject({
-      owner: "alice",
-      template: { name: "react", commit: null },
-      repository: { owner: "acme-apps", name: "app-expenses", id: "4242" },
-    });
-    expect(ready).toMatchObject({ templateCommit });
     expect(events()).toEqual([
       expect.objectContaining({
         eventType: "git_repository.created",
         subject: "alice",
         appId: json.app.id,
+        repository,
         details: {
           repositoryId: "4242",
           template: "react",
@@ -139,7 +125,6 @@ describe("POST /api/apps", () => {
         },
       }),
     ]);
-    expect(gitApp.weldall.apps.get(json.app.id)?.ready).toBe(true);
     expect(hostCalls(github).filter(({ path }) => path.endsWith("/generate"))).toHaveLength(1);
   });
 
@@ -243,14 +228,14 @@ describe("POST /api/apps", () => {
     const failed = await gitApp.call("alice", "POST", "/api/apps", { body: create() });
     expect(failed.status).toBe(503);
     expect(failed.json.error).toBe("audit_unavailable");
-    const [app] = gitApp.weldall.apps.values();
+    const app = await stored();
     expect(app).toMatchObject({ ready: false, template: { commit: null } });
     expect(events()).toEqual([]);
     // The same event id is sent twice (one retry), then no rejection report is attempted.
     const reports = gitApp.weldall.callsOf("reportAuditEvent") as { eventId: string }[];
     expect(reports).toHaveLength(2);
     expect(reports[0]!.eventId).toBe(reports[1]!.eventId);
-    expect(methods()).not.toContain("updateApp");
+    expect(gitApp.registryCalls).not.toContain("markReady");
 
     const github = mockGitHub();
     const retry = await gitApp.call("alice", "POST", "/api/apps", { body: create() });
@@ -263,49 +248,42 @@ describe("POST /api/apps", () => {
         details: expect.objectContaining({ existingRepository: true }),
       }),
     ]);
-    expect(gitApp.weldall.apps.get(app!.id)?.ready).toBe(true);
+    expect((await stored())?.ready).toBe(true);
   });
 
-  it("retries registering once after a transient failure and continues", async () => {
+  it("retries registering once when the registry could not be reached and continues", async () => {
     const github = mockGitHub();
-    gitApp.weldall.fail("createApp", new WeldallAuthError("server_error", "down", 503));
+    gitApp.failRegistry("register", registryUnavailable());
     const { status, json } = await gitApp.call("alice", "POST", "/api/apps", { body: create() });
     expect(status).toBe(200);
     expect(json).toMatchObject({ created: true });
-    expect(methods()).toEqual([
-      "checkSubjectScopes",
-      "lookupApp",
-      "createApp",
-      "createApp",
-      "reportAuditEvent",
-      "updateApp",
-    ]);
-    expect(gitApp.weldall.apps.get(json.app.id)?.ready).toBe(true);
+    expect(gitApp.registryCalls).toEqual(["byRepository", "register", "register", "markReady"]);
+    expect((await stored())?.ready).toBe(true);
     expect(events()).toEqual([expect.objectContaining({ eventType: "git_repository.created" })]);
     expect(hostCalls(github).filter(({ path }) => path.endsWith("/generate"))).toHaveLength(1);
     expect(gitApp.logs).toEqual([]);
   });
 
-  it("does not retry registering after Weldall refused it", async () => {
+  it("does not retry registering after the registry refused it", async () => {
     mockGitHub();
-    gitApp.weldall.fail("createApp", new WeldallAuthError("access_denied", "no", 403));
+    gitApp.failRegistry("register", new GitAppError("app_exists", "taken", 409));
     const { status, json } = await gitApp.call("alice", "POST", "/api/apps", { body: create() });
     expect(status).toBe(503);
     expect(json.error).toBe("registry_unavailable");
-    expect(gitApp.weldall.callsOf("createApp")).toHaveLength(1);
+    expect(gitApp.registryCalls.filter((method) => method === "register")).toHaveLength(1);
   });
 
-  it("names and logs a repository the host created but Weldall did not register", async () => {
+  it("names and logs a repository the host created but the registry did not store", async () => {
     mockGitHub();
-    gitApp.weldall.fail("createApp", new TypeError("fetch failed"), new TypeError("again"));
+    gitApp.failRegistry("register", registryUnavailable(), registryUnavailable());
     const { status, json } = await gitApp.call("alice", "POST", "/api/apps", { body: create() });
     expect(status).toBe(503);
     expect(json).toMatchObject({
       error: "registry_unavailable",
       error_description: expect.stringContaining("acme-apps/app-expenses"),
     });
-    expect(gitApp.weldall.callsOf("createApp")).toHaveLength(2);
-    expect(gitApp.weldall.apps.size).toBe(0);
+    expect(gitApp.registryCalls.filter((method) => method === "register")).toHaveLength(2);
+    expect(await stored()).toBeNull();
     expect(gitApp.logs).toContainEqual(
       expect.objectContaining({
         level: "error",
@@ -335,13 +313,13 @@ describe("POST /api/apps", () => {
       error: "reviewer_team_access_missing",
       error_description: expect.stringContaining('"app-reviewers"'),
     });
-    const [app] = gitApp.weldall.apps.values();
+    const app = await stored();
     expect(app?.ready).toBe(false);
     expect(events()).toEqual([
       expect.objectContaining({
         eventType: "git_repository.denied",
         appId: app!.id,
-        repository: null,
+        repository,
       }),
     ]);
   });
@@ -357,7 +335,7 @@ describe("POST /api/apps", () => {
 
 describe("GET /api/apps/:id", () => {
   it("returns the person's own app and the same 404 for another person's", async () => {
-    const app = seedApp("alice");
+    const app = await seedApp("alice");
     const own = await gitApp.call("alice", "GET", `/api/apps/${app.id}`);
     expect(own).toMatchObject({ status: 200, json: { app: { id: app.id, ready: true } } });
     const other = await gitApp.call("bob", "GET", `/api/apps/${app.id}`);
@@ -369,7 +347,7 @@ describe("GET /api/apps/:id", () => {
 
 describe("POST /api/apps/:id/pull-requests", () => {
   it("writes the trigger line with the Weldall user id and audits the pull request's commits", async () => {
-    const app = seedApp("alice");
+    const app = await seedApp("alice");
     const github = mockGitHubPullRequests();
     const { status, json } = await gitApp.call(
       "alice",
@@ -392,12 +370,13 @@ describe("POST /api/apps/:id/pull-requests", () => {
     expect(opened?.body.body).toBe(
       "<!-- weldall:published-by -->\nPublished with Weldall (Weldall user alice).",
     );
-    expect(methods()).toEqual(["checkSubjectScopes", "lookupApp", "reportAuditEvent"]);
+    expect(methods()).toEqual(["checkSubjectScopes", "reportAuditEvent"]);
     expect(events()).toEqual([
       expect.objectContaining({
         eventType: "git_pull_request.opened",
         subject: "alice",
         appId: app.id,
+        repository,
         details: {
           number: 1,
           webUrl: "https://github.com/acme-apps/app-expenses/pull/1",
@@ -414,7 +393,7 @@ describe("POST /api/apps/:id/pull-requests", () => {
   });
 
   it("answers another person's app like an unknown one, without contacting the host", async () => {
-    const app = seedApp("alice");
+    const app = await seedApp("alice");
     const github = mockGitHubPullRequests();
     const { status } = await gitApp.call("bob", "POST", `/api/apps/${app.id}/pull-requests`, {
       body: { head, title: "Take over" },
@@ -434,7 +413,7 @@ describe("POST /api/apps/:id/pull-requests", () => {
     ["a branch other than a publish branch", {}, "main", 400, "invalid_request"],
     ["an app that is not ready", { ready: false }, head, 409, "repository_not_ready"],
   ] as const)("refuses %s", async (_, overrides, branch, expected, code) => {
-    const app = seedApp("alice", overrides);
+    const app = await seedApp("alice", overrides);
     const github = mockGitHubPullRequests();
     const { status, json } = await gitApp.call(
       "alice",
@@ -453,7 +432,7 @@ describe("POST /api/apps/:id/pull-requests", () => {
   });
 
   it("answers 503 when the audit entry is not stored, and a retry reports the existing pull request", async () => {
-    const app = seedApp("alice");
+    const app = await seedApp("alice");
     mockGitHubPullRequests();
     gitApp.weldall.fail("reportAuditEvent", new TypeError("fetch failed"), new TypeError("again"));
     const body = { head, title: "Add receipts" };
@@ -501,8 +480,8 @@ describe("GET /api/apps/:id/status", () => {
     ],
   };
 
-  it("returns reviews as sanitised data and writes new links back to Weldall", async () => {
-    const app = seedApp("alice");
+  it("returns reviews as sanitised data and writes new links to the registry", async () => {
+    const app = await seedApp("alice");
     mockGitHubPullRequests(scenario);
     const { status, json } = await gitApp.call("alice", "GET", `/api/apps/${app.id}/status`);
     expect(status).toBe(200);
@@ -522,34 +501,32 @@ describe("GET /api/apps/:id/status", () => {
       links: { preview: "https://preview.example.com/pr-3", live: "https://app.example.com/" },
       publish: { protectedPaths: [".github/workflows"], commitIdentity: botIdentity },
     });
-    expect(gitApp.weldall.callsOf("updateApp")).toEqual([
-      {
-        appId: app.id,
-        links: { preview: "https://preview.example.com/pr-3", live: "https://app.example.com/" },
-      },
-    ]);
+    expect((await gitApp.registry.byId(app.id))?.links).toEqual({
+      preview: "https://preview.example.com/pr-3",
+      live: "https://app.example.com/",
+    });
     // Status reads are not audited (the contract has no event for them).
     expect(events()).toEqual([]);
   });
 
   it("does not write unchanged links and refuses a branch that is not a publish branch", async () => {
-    const app = seedApp("alice", {
+    const app = await seedApp("alice", {
       links: { preview: "https://preview.example.com/pr-3", live: "https://app.example.com/" },
     });
     mockGitHubPullRequests(scenario);
     expect((await gitApp.call("alice", "GET", `/api/apps/${app.id}/status`)).status).toBe(200);
-    expect(gitApp.weldall.callsOf("updateApp")).toEqual([]);
+    expect(gitApp.registryCalls).not.toContain("updateLinks");
     const refused = await gitApp.call("alice", "GET", `/api/apps/${app.id}/status?branch=main`);
     expect(refused).toMatchObject({ status: 400, json: { error: "invalid_request" } });
   });
 
-  it("fails closed when Weldall does not take the links", async () => {
-    const app = seedApp("alice");
+  it("fails closed when the registry does not take the links", async () => {
+    const app = await seedApp("alice");
     mockGitHubPullRequests(scenario);
-    gitApp.weldall.fail("updateApp", new WeldallAuthError("server_error", "down", 503));
+    gitApp.failRegistry("updateLinks", registryUnavailable());
     const { status, json } = await gitApp.call("alice", "GET", `/api/apps/${app.id}/status`);
     expect(status).toBe(503);
-    expect(json.error).toBe("weldall_unavailable");
+    expect(json.error).toBe("registry_unavailable");
   });
 });
 
@@ -578,7 +555,7 @@ describe("GET /api/admin/checklist", () => {
   });
 
   it("uses a named ready app's repository for the repository checks", async () => {
-    const app = seedApp("alice");
+    const app = await seedApp("alice");
     mockGitHubChecks();
     const { status, json } = await gitApp.call(
       "admin",

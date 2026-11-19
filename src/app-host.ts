@@ -20,26 +20,24 @@ import {
  * Weldall machine client that holds {@link APP_HOST_SCOPE} and is allowed for its own resource,
  * and uses these endpoints of the Weldall API:
  *
- * - `POST {issuer}/api/app-host/v1/apps` creates an app registry entry for a person.
- * - `PATCH {issuer}/api/app-host/v1/apps/{id}` updates links, default branch and repository.
- * - `POST {issuer}/api/app-host/v1/apps/lookup` resolves an app by id or repository and answers
- *   whether it belongs to a person.
- * - `POST {issuer}/api/app-host/v1/audit-events` records a Git audit event in Weldall's audit log.
+ * - `POST {issuer}/api/app-host/v1/audit-events` records a Git or app registry audit event in
+ *   Weldall's audit log.
  * - `POST {issuer}/api/authorization/v1/check-scopes` (scope {@link SUBJECT_SCOPES_CHECK_SCOPE})
  *   checks that a person still holds {@link LOGIN_SCOPE} and the resource's own scopes.
  *
- * Every request names the caller's `resource` (its resource identifier); Weldall answers only for
- * apps of that resource and only when the machine client is allowed for it. Errors use the OAuth
- * error body `{ error, error_description }`.
+ * Every request names the caller's `resource` (its resource identifier); Weldall answers only
+ * when the machine client is allowed for it. Errors use the OAuth error body
+ * `{ error, error_description }`.
+ *
+ * The app registry (apps, owners, re-verification) is the app host's own: Weldall keeps no app
+ * records. An event names the app by the app host's id (`appId`) and always by its repository
+ * when known, so Weldall's audit log shows the repository without looking anything up.
  *
  * Good to know when building against it:
- * - A person acts only on apps they own: a success audit event that names an app must name the
- *   app's owner as `subject` (`403 subject_not_owner` otherwise). Rejections may name anyone.
- * - There is no delete or owner-transfer endpoint. A failed first publish leaves a not-ready
- *   entry (template commit null) that the same owner resumes by registering the same repository
- *   again and then setting the template commit.
- * - `git_repository.created` requires a non-null `template`; a registered existing repository is
- *   not reported with it.
+ * - The app host decides who may act on an app: a success event names the person who acted, and
+ *   for repository, push, fetch, pull request and credential events that is the app's owner.
+ * - `git_repository.created` requires a non-null `template`; an existing repository an
+ *   administrator registers is reported as `git_repository.registered`.
  * - A report naming an unknown or unverified subject is `404 unknown_subject`; for a rejection,
  *   report it again with `subject: null` (the machine client is then the actor).
  */
@@ -95,146 +93,12 @@ export const repositoryPartSchema = z.string().regex(/^[A-Za-z0-9._-]{1,100}$/);
 export const repositoryIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,64}$/);
 /** Lower-case SHA-1 or SHA-256 object id. */
 export const gitCommitIdSchema = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
-const branchSchema = text(255);
 const auditId = z.string().regex(/^[A-Za-z0-9._:-]{1,191}$/);
 const warningCode = z.string().regex(/^[a-z0-9_]{1,64}$/);
 
 const repositoryRef = z
   .object({ owner: repositoryPartSchema, name: repositoryPartSchema })
   .strict();
-
-// ---------------------------------------------------------------------------------------------
-// App registry
-// ---------------------------------------------------------------------------------------------
-
-/** `POST /api/app-host/v1/apps`. */
-export const appHostCreateAppRequestSchema = z
-  .object({
-    resource: appHostResourceSchema,
-    /** The person who owns the app; must exist and hold {@link LOGIN_SCOPE}. */
-    owner: weldallSubjectSchema,
-    name: text(100),
-    purpose: z.string().trim().min(1).max(300),
-    repository: z
-      .object({
-        owner: repositoryPartSchema,
-        name: repositoryPartSchema,
-        id: repositoryIdSchema.nullable(),
-        webUrl: appHostHttpsUrlSchema.nullable(),
-      })
-      .strict(),
-    /** Branch nobody pushes to directly; changes reach it only through reviewed pull requests. */
-    defaultBranch: branchSchema,
-    /**
-     * Template the repository starts from. Register with `commit: null` before the repository is
-     * fully set up and set the commit with an update once it is: until then the app is not ready.
-     */
-    template: z
-      .object({ name: text(100), commit: gitCommitIdSchema.nullable() })
-      .strict()
-      .nullable(),
-  })
-  .strict();
-export type AppHostCreateAppRequest = z.input<typeof appHostCreateAppRequestSchema>;
-
-/**
- * `PATCH /api/app-host/v1/apps/{id}`: omitted fields stay, a null link clears it. The repository
- * id can only be set once; a template commit only on a template app that has none yet. The expiry
- * and confirmation are the owner's and never change here.
- */
-export const appHostUpdateAppRequestSchema = z
-  .object({
-    resource: appHostResourceSchema,
-    repository: z
-      .object({
-        owner: repositoryPartSchema,
-        name: repositoryPartSchema,
-        id: repositoryIdSchema,
-        webUrl: appHostHttpsUrlSchema.nullable(),
-      })
-      .partial()
-      .strict()
-      .optional(),
-    defaultBranch: branchSchema.optional(),
-    templateCommit: gitCommitIdSchema.optional(),
-    links: z
-      .object({
-        preview: appHostHttpsUrlSchema.nullable(),
-        live: appHostHttpsUrlSchema.nullable(),
-      })
-      .partial()
-      .strict()
-      .optional(),
-  })
-  .strict()
-  .refine(
-    ({ repository, defaultBranch, templateCommit, links }) =>
-      (repository && Object.keys(repository).length > 0) ||
-      defaultBranch !== undefined ||
-      templateCommit !== undefined ||
-      (links && Object.keys(links).length > 0),
-    "at least one change is required",
-  );
-export type AppHostUpdateAppRequest = z.input<typeof appHostUpdateAppRequestSchema>;
-
-/**
- * `POST /api/app-host/v1/apps/lookup`: by id or by repository (owner and name match
- * case-insensitively, as Git hosts treat them). With `subject`, the answer says whether that
- * person owns the app; an unknown person is `404 unknown_subject`.
- */
-export const appHostLookupRequestSchema = z
-  .object({
-    resource: appHostResourceSchema,
-    app: z.union([
-      z.object({ id: appIdSchema }).strict(),
-      z
-        .object({ repositoryOwner: repositoryPartSchema, repositoryName: repositoryPartSchema })
-        .strict(),
-    ]),
-    subject: weldallSubjectSchema.optional(),
-  })
-  .strict();
-export type AppHostLookupRequest = z.input<typeof appHostLookupRequestSchema>;
-
-const appState = z.enum(["active", "expiring_soon", "expired"]);
-/** One app as Weldall returns it to its app host. Unknown fields are ignored for forward compatibility. */
-export const appHostAppSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  purpose: z.string(),
-  owner: z.object({ id: z.string() }),
-  /** Key of the resource the app belongs to. */
-  resource: z.string(),
-  repository: z.object({
-    owner: z.string(),
-    name: z.string(),
-    id: z.string().nullable(),
-    webUrl: z.string().nullable(),
-  }),
-  defaultBranch: z.string(),
-  template: z.object({ name: z.string(), commit: z.string().nullable() }).nullable(),
-  /** False while a template app has no template commit yet; refuse git traffic until it is true. */
-  ready: z.boolean(),
-  links: z.object({ preview: z.string().nullable(), live: z.string().nullable() }),
-  createdAt: z.string(),
-  confirmedAt: z.string().nullable(),
-  expiresAt: z.string(),
-  /** Re-verification state; an expired app is only flagged, never stopped. */
-  state: appState,
-});
-export type AppHostApp = z.output<typeof appHostAppSchema>;
-
-/** Answer to create: `created` is false when the same owner had already registered the repository. */
-export const appHostCreateAppResponseSchema = z.object({
-  created: z.boolean(),
-  app: appHostAppSchema,
-});
-export const appHostAppResponseSchema = z.object({ app: appHostAppSchema });
-export const appHostLookupResponseSchema = z.object({
-  app: appHostAppSchema,
-  /** Null when no subject was asked about. */
-  ownedBySubject: z.boolean().nullable(),
-});
 
 // ---------------------------------------------------------------------------------------------
 // Audit events
@@ -279,6 +143,19 @@ export const appHostAuditDetailsSchemas = {
       warnings: z.array(warningCode).max(APP_HOST_AUDIT_LIMITS.warnings),
     })
     .strict(),
+  /**
+   * An administrator registered an existing repository of the organisation (one not created from
+   * a template by this app host) as an app of `owner`; the subject is the administrator.
+   */
+  "git_repository.registered": z
+    .object({
+      owner: weldallSubjectSchema,
+      repositoryId: repositoryIdSchema.nullable(),
+      defaultBranch: freeText,
+      warnings: z.array(warningCode).max(APP_HOST_AUDIT_LIMITS.warnings),
+    })
+    .strict(),
+  /** `template` is null for a refused registration of an existing repository. */
   "git_repository.denied": z.object({ template: freeText.nullable() }).strict(),
   "git_repository.failed": z.object({ template: freeText.nullable() }).strict(),
   /** Report before forwarding a push; forward only after Weldall accepted this entry. */
@@ -323,6 +200,22 @@ export const appHostAuditDetailsSchemas = {
       durationMs: count,
     })
     .strict(),
+  /**
+   * The owner confirmed that an app is still needed (re-verification): its expiry moved from
+   * `previousExpiresAt` to `expiresAt`. `previousState` shows whether the app was flagged.
+   */
+  "app_confirmation.succeeded": z
+    .object({
+      previousExpiresAt: z.string().datetime(),
+      expiresAt: z.string().datetime(),
+      previousState: z.enum(["active", "expiring_soon", "expired"]),
+    })
+    .strict(),
+  /**
+   * A confirmation was refused. An unknown id and another person's app are refused alike, so the
+   * report names neither an app nor a repository; the requested id is in the reason.
+   */
+  "app_confirmation.denied": z.object({}).strict(),
 } as const;
 export type AppHostAuditEventType = keyof typeof appHostAuditDetailsSchemas;
 export const APP_HOST_AUDIT_EVENT_TYPES = Object.keys(
@@ -346,8 +239,8 @@ const envelope = {
   eventId: z.string().regex(/^[A-Za-z0-9._:-]{16,128}$/),
 };
 /**
- * Success events always concern a registered app and the person who acted, who must be the
- * app's owner (`403 subject_not_owner` otherwise).
+ * Success events always concern a registered app (by the app host's id and its repository) and
+ * the person who acted. The app host has checked that the person may act on the app.
  */
 const success = <T extends AppHostAuditEventType>(eventType: T) =>
   z
@@ -356,13 +249,14 @@ const success = <T extends AppHostAuditEventType>(eventType: T) =>
       eventType: z.literal(eventType),
       subject: weldallSubjectSchema,
       appId: appIdSchema,
+      repository: repositoryRef,
       details: appHostAuditDetailsSchemas[eventType],
     })
     .strict();
 /**
  * A rejection may happen before the person, app or repository is known. Give `appId` when the
- * app was resolved (Weldall then records its repository), otherwise the requested `repository`
- * if known. Without a subject, the reporting machine client is recorded as the actor.
+ * app was resolved and `repository` whenever it is known (the app's, or the requested one).
+ * Without a subject, the reporting machine client is recorded as the actor.
  */
 const rejection = <T extends AppHostAuditEventType>(eventType: T) =>
   z
@@ -383,6 +277,7 @@ const rejection = <T extends AppHostAuditEventType>(eventType: T) =>
 export const appHostAuditEventRequestSchema = z
   .discriminatedUnion("eventType", [
     success("git_repository.created"),
+    success("git_repository.registered"),
     rejection("git_repository.denied"),
     rejection("git_repository.failed"),
     success("git_push.forwarded"),
@@ -398,6 +293,8 @@ export const appHostAuditEventRequestSchema = z
     success("git_credential.issued"),
     rejection("git_credential.denied"),
     rejection("git_credential.failed"),
+    success("app_confirmation.succeeded"),
+    rejection("app_confirmation.denied"),
     z
       .object({
         ...envelope,
@@ -411,12 +308,6 @@ export const appHostAuditEventRequestSchema = z
       .strict(),
   ])
   .superRefine((report, context) => {
-    if ("appId" in report && "repository" in report && report.appId && report.repository)
-      context.addIssue({
-        code: "custom",
-        path: ["repository"],
-        message: "give either appId or repository, not both",
-      });
     const details = report.details as { refUpdates?: unknown[]; refUpdateCount?: number };
     if (
       details.refUpdates &&
@@ -502,7 +393,7 @@ export function createWeldallAppHostClient(options: WeldallAppHostClientOptions)
 
   async function call<T>(
     scope: string,
-    method: "POST" | "PATCH",
+    method: "POST",
     path: string,
     body: unknown,
     schema: z.ZodType<T>,
@@ -537,36 +428,6 @@ export function createWeldallAppHostClient(options: WeldallAppHostClientOptions)
   const withResource = <T extends object>(input: T) => ({ ...input, resource: options.resource });
 
   return {
-    createApp: async (input: Omit<AppHostCreateAppRequest, "resource">) =>
-      (
-        await call(
-          APP_HOST_SCOPE,
-          "POST",
-          `${APP_HOST_API_PATH}/apps`,
-          withResource(input),
-          appHostCreateAppResponseSchema,
-        )
-      ).body,
-    updateApp: async (appId: string, input: Omit<AppHostUpdateAppRequest, "resource">) =>
-      (
-        await call(
-          APP_HOST_SCOPE,
-          "PATCH",
-          `${APP_HOST_API_PATH}/apps/${encodeURIComponent(appId)}`,
-          withResource(input),
-          appHostAppResponseSchema,
-        )
-      ).body.app,
-    lookupApp: async (input: Omit<AppHostLookupRequest, "resource">) =>
-      (
-        await call(
-          APP_HOST_SCOPE,
-          "POST",
-          `${APP_HOST_API_PATH}/apps/lookup`,
-          withResource(input),
-          appHostLookupResponseSchema,
-        )
-      ).body,
     /** Resolves only when Weldall stored the entry; gate a push on `git_push.forwarded` with it. */
     reportAuditEvent: async (
       input: WithoutResource<AppHostAuditEventRequest>,

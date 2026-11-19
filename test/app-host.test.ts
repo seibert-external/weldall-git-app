@@ -4,8 +4,6 @@ import { generateEs256KeyPair } from "@weldall/sdk";
 import {
   APP_HOST_AUDIT_EVENT_TYPES,
   appHostAuditEventRequestSchema,
-  appHostCreateAppRequestSchema,
-  appHostUpdateAppRequestSchema,
   createWeldallAppHostClient,
 } from "../src/app-host.js";
 
@@ -84,6 +82,7 @@ describe("app host contract", () => {
     eventType: "git_push.forwarded",
     subject: "user-1",
     appId: "cm3k9x2f80001",
+    repository: { owner: "acme-apps", name: "app-expenses" },
     details: {
       refUpdates: [
         { ref: "refs/heads/weldall/publish-1", oldCommit: "0".repeat(40), newCommit: commit },
@@ -97,10 +96,13 @@ describe("app host contract", () => {
     expect(appHostAuditEventRequestSchema.safeParse(auditEventRequest).success).toBe(true);
   });
 
-  it("covers every Git audit event", () => {
-    expect(APP_HOST_AUDIT_EVENT_TYPES).toHaveLength(17);
+  it("covers every Git and app registry audit event", () => {
+    expect(APP_HOST_AUDIT_EVENT_TYPES).toHaveLength(20);
     expect(APP_HOST_AUDIT_EVENT_TYPES).toContain("git_push.forwarded");
     expect(APP_HOST_AUDIT_EVENT_TYPES).toContain("git_host.checked");
+    expect(APP_HOST_AUDIT_EVENT_TYPES).toContain("git_repository.registered");
+    expect(APP_HOST_AUDIT_EVENT_TYPES).toContain("app_confirmation.succeeded");
+    expect(APP_HOST_AUDIT_EVENT_TYPES).toContain("app_confirmation.denied");
   });
 
   it("accepts a well-formed report and rejects unknown fields and events", () => {
@@ -109,16 +111,17 @@ describe("app host contract", () => {
       { ...forwarded, extra: 1 },
       { ...forwarded, details: { ...forwarded.details, token: "x" } },
       { ...forwarded, eventType: "skill.created" },
-      // A success always names the person and the app.
+      // A success always names the person, the app and its repository.
       { ...forwarded, subject: null },
       { ...forwarded, appId: null },
+      { ...forwarded, repository: null },
       { ...forwarded, details: { ...forwarded.details, refUpdateCount: 0 } },
       { ...forwarded, eventId: "too-short" },
     ])
       expect(appHostAuditEventRequestSchema.safeParse(report).success).toBe(false);
   });
 
-  it("lets a rejection name either the app or the repository", () => {
+  it("lets a rejection name the app, the repository, both or neither", () => {
     const denied = {
       resource,
       eventId: forwarded.eventId,
@@ -138,35 +141,56 @@ describe("app host contract", () => {
     expect(appHostAuditEventRequestSchema.safeParse(denied).success).toBe(true);
     expect(
       appHostAuditEventRequestSchema.safeParse({ ...denied, appId: "cm3k9x2f80001" }).success,
-    ).toBe(false);
+    ).toBe(true);
+    expect(appHostAuditEventRequestSchema.safeParse({ ...denied, repository: null }).success).toBe(
+      true,
+    );
   });
 
-  it("accepts only https links without credentials and at least one change", () => {
-    const app = {
+  it("takes the registry's own events: a registered existing repository and confirmations", () => {
+    const registered = {
       resource,
-      owner: "user-1",
-      name: "tracker",
-      purpose: "Tracks expenses",
-      repository: { owner: "acme-apps", name: "app-tracker", id: null, webUrl: null },
-      defaultBranch: "main",
-      template: { name: "react", commit: null },
+      eventId: forwarded.eventId,
+      eventType: "git_repository.registered",
+      subject: "admin-1",
+      appId: "app_0123456789abcdef0123",
+      repository: { owner: "acme-apps", name: "legacy-tool" },
+      details: { owner: "user-1", repositoryId: "4242", defaultBranch: "main", warnings: [] },
     };
-    expect(appHostCreateAppRequestSchema.safeParse(app).success).toBe(true);
+    expect(appHostAuditEventRequestSchema.safeParse(registered).success).toBe(true);
     expect(
-      appHostCreateAppRequestSchema.safeParse({
-        ...app,
-        repository: { ...app.repository, webUrl: "http://git.example.com/x" },
+      appHostAuditEventRequestSchema.safeParse({
+        ...registered,
+        details: { ...registered.details, owner: undefined },
       }).success,
     ).toBe(false);
-    expect(appHostUpdateAppRequestSchema.safeParse({ resource }).success).toBe(false);
+    const confirmed = {
+      resource,
+      eventId: forwarded.eventId,
+      eventType: "app_confirmation.succeeded",
+      subject: "user-1",
+      appId: "app_0123456789abcdef0123",
+      repository: { owner: "acme-apps", name: "app-expenses" },
+      details: {
+        previousExpiresAt: "2026-11-01T00:00:00.000Z",
+        expiresAt: "2027-02-17T00:00:00.000Z",
+        previousState: "expired",
+      },
+    };
+    expect(appHostAuditEventRequestSchema.safeParse(confirmed).success).toBe(true);
+    const denied = {
+      resource,
+      eventId: forwarded.eventId,
+      eventType: "app_confirmation.denied",
+      subject: "user-1",
+      appId: null,
+      repository: null,
+      reason: "No app of yours has this id.",
+      details: {},
+    };
+    expect(appHostAuditEventRequestSchema.safeParse(denied).success).toBe(true);
     expect(
-      appHostUpdateAppRequestSchema.safeParse({
-        resource,
-        links: { live: "https://user:secret@app.example.com/" },
-      }).success,
+      appHostAuditEventRequestSchema.safeParse({ ...denied, details: { appId: "x" } }).success,
     ).toBe(false);
-    expect(
-      appHostUpdateAppRequestSchema.safeParse({ resource, links: { preview: null } }).success,
-    ).toBe(true);
   });
 });

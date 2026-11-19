@@ -1,11 +1,10 @@
-import type { AppHostApp } from "../app-host.js";
 import { authorizePerson } from "../access.js";
-import { auditList, type AuditRejection, type AuditReport } from "../audit.js";
+import { auditApp, auditList, type AuditRejection, type AuditReport } from "../audit.js";
 import { GitAppError } from "../errors.js";
 import type { GitForwardingTarget, GitRepositoryRef } from "../hosts/git-host.js";
 import { errorForLog } from "../log.js";
 import type { GitAppServices } from "../services/context.js";
-import { lookupApp } from "../weldall.js";
+import type { RegistryApp } from "../registry/registry.js";
 import type { GitCredentialSigner } from "./credentials.js";
 import {
   createTransferLimiter,
@@ -41,8 +40,8 @@ import {
  * 1. verifies the signed git credential (`credentials.ts`) and that it names this repository and,
  *    for a push, write access;
  * 2. asks Weldall, every time and without caching, whether the person still holds the login
- *    permission and the publish scope (`checkSubjectScopes`) and still owns the app
- *    (`lookupApp`); without an answer nothing is forwarded;
+ *    permission and the publish scope (`checkSubjectScopes`), and the app registry whether the
+ *    person still owns the app; without both answers nothing is forwarded;
  * 3. for a push, reads the ref update commands before anything reaches the host, applies the
  *    push rules (`rules.ts`) and the pull request state, and forwards only after Weldall stored
  *    `git_push.forwarded`;
@@ -206,8 +205,7 @@ export function createGitProxy({ services, signer, ...options }: GitProxyOptions
     /**
      * The app a validly signed, unexpired credential for this repository names: rejections before
      * the app is resolved (a read-only push, a revoked scope) are linked to it. Cleared when the
-     * lookup shows it is not this person's app here. Should Weldall no longer know it, the
-     * reporter repeats the rejection without it (`AuditReporter.rejection`).
+     * lookup shows it is not this person's app here.
      */
     let credentialAppId: string | null = null;
     let refUpdates: GitRefUpdate[] | undefined;
@@ -250,12 +248,14 @@ export function createGitProxy({ services, signer, ...options }: GitProxyOptions
               eventType: "git_push.completed",
               subject: credential.subject,
               appId: target.appId,
+              repository: target.repository,
               details: { ...refDetails, ...transfer },
             }
           : {
               eventType: "git_fetch.completed",
               subject: credential.subject,
               appId: target.appId,
+              repository: target.repository,
               details: transfer,
             };
         try {
@@ -283,9 +283,9 @@ export function createGitProxy({ services, signer, ...options }: GitProxyOptions
       const appId = target?.appId ?? credentialAppId;
       const common = {
         subject: credential?.subject ?? null,
-        // The contract takes either the app (Weldall records its repository) or the repository.
         appId,
-        repository: appId ? null : requested,
+        // The credential named this repository; once resolved, in the registry's spelling.
+        repository: target?.repository ?? requested,
         reason: entry.reason,
         ...(entry.reasonCode ? { reasonCode: entry.reasonCode } : {}),
       };
@@ -301,8 +301,6 @@ export function createGitProxy({ services, signer, ...options }: GitProxyOptions
               eventType: entry.outcome === "denied" ? "git_fetch.denied" : "git_fetch.failed",
               details: partial,
             },
-        // Should Weldall no longer know the app, the requested repository is named instead.
-        { repository: requested },
       );
     };
 
@@ -465,27 +463,24 @@ export function createGitProxy({ services, signer, ...options }: GitProxyOptions
         }
       }
 
-      // Live checks with Weldall on every request: the credential alone is not enough.
-      let app: AppHostApp;
+      // Live checks on every request: the credential alone is not enough.
+      let app: RegistryApp;
       try {
         const [, found] = await Promise.all([
           authorizePerson(weldall, verified.subject, [services.scopes.publish]),
-          lookupApp(weldall, {
-            app: { repositoryOwner: path.owner, repositoryName: path.name },
-            subject: verified.subject,
-          }),
+          services.registry.byRepository(path),
         ]);
-        if (!found || found.app.id !== verified.appId) {
+        if (!found || found.id !== verified.appId) {
           credentialAppId = null;
           return await refuse("this git credential is not valid for this repository");
         }
-        if (found.ownedBySubject !== true) {
+        if (found.owner.id !== verified.subject) {
           credentialAppId = null;
           return await refuse("this app belongs to another person", {
             reasonCode: "scope_not_granted",
           });
         }
-        app = found.app;
+        app = found;
       } catch (error) {
         if (!(error instanceof GitAppError)) throw error;
         return await refuse(
@@ -642,7 +637,7 @@ export function createGitProxy({ services, signer, ...options }: GitProxyOptions
           await services.audit.success({
             eventType: "git_push.forwarded",
             subject: verified.subject,
-            appId: app.id,
+            ...auditApp(app),
             details: {
               refUpdates: auditList(refs, "refUpdates"),
               refUpdateCount: refs.length,

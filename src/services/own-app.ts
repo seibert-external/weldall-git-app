@@ -1,25 +1,21 @@
-import { appIdSchema, type AppHostApp } from "../app-host.js";
 import { GitAppError } from "../errors.js";
-import { lookupApp } from "../weldall.js";
+import type { RegistryApp } from "../registry/registry.js";
 import type { GitAppServices, Person } from "./context.js";
 
 /**
- * Resolves one of the person's apps from Weldall's registry. An unknown id and another person's app get the same 404, so the
- * answer reveals nothing about other people's apps. The repository must have finished creation
- * and belong to this instance's organisation.
+ * Resolves one of the person's apps from the app registry. An unknown id and another person's app
+ * get the same 404, so the answer reveals nothing about other people's apps. The repository must
+ * have finished creation and belong to this instance's organisation.
  */
 export async function resolveOwnApp(
   services: GitAppServices,
   person: Person,
   appId: string,
   { requireReady = true }: { requireReady?: boolean } = {},
-): Promise<AppHostApp> {
-  const found = appIdSchema.safeParse(appId).success
-    ? await lookupApp(services.weldall, { app: { id: appId }, subject: person.id })
-    : null;
-  if (!found || found.ownedBySubject !== true)
+): Promise<RegistryApp> {
+  const app = await services.registry.byId(appId);
+  if (!app || app.owner.id !== person.id)
     throw new GitAppError("not_found", "No app of yours has this id.", 404);
-  const { app } = found;
   if (app.repository.owner.toLowerCase() !== services.host.organization.toLowerCase())
     throw new GitAppError(
       "invalid_target",

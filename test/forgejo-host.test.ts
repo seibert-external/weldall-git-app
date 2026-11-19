@@ -239,6 +239,35 @@ describe("createRepository", () => {
   });
 });
 
+describe("inspectExistingRepository", () => {
+  it("reads an existing private repository, drops the bot's admin right and checks the team", async () => {
+    const mock = mockForgejo();
+    mock.repositories.set("app-expenses", { admin: true });
+    const result = await host().inspectExistingRepository({ name: "app-expenses" }, signal());
+    expect(result).toEqual({
+      repository: { owner: "example-org", name: "app-expenses", id: "42" },
+      defaultBranch: "main",
+      webUrl: `${FORGEJO_BASE_URL}/example-org/app-expenses`,
+      warnings: [],
+    });
+    expect(mock.repositories.get("app-expenses")).toEqual({ admin: false });
+    expect(mock.calls.some(({ path }) => path.endsWith("/generate"))).toBe(false);
+  });
+
+  it("refuses a public repository and a template repository", async () => {
+    mockForgejo({ repository: { private: false } });
+    expect(
+      await failure(host().inspectExistingRepository({ name: "app-expenses" }, signal())),
+    ).toMatchObject({ code: "repository_not_private" });
+    const mock = mockForgejo();
+    const template = config.templates[0]!.repository.split("/")[1]!;
+    expect(
+      await failure(host().inspectExistingRepository({ name: template }, signal())),
+    ).toMatchObject({ code: "repository_is_template", status: 409 });
+    expect(mock.calls).toEqual([]);
+  });
+});
+
 describe("git proxy lookups", () => {
   it("forwards to the repository with the bot token as Basic password and no expiry", async () => {
     const target = await host().getForwardingTarget({ repository, access: "write" }, signal());

@@ -1,4 +1,4 @@
-import { auditList, auditText } from "../audit.js";
+import { auditApp, auditList, auditText } from "../audit.js";
 import { authorizePerson } from "../access.js";
 import { GitAppError } from "../errors.js";
 import type { GitHostWarning, GitReviewers } from "../hosts/git-host.js";
@@ -6,7 +6,7 @@ import { GIT_PUBLISH_BRANCH_PREFIX, isPublishBranch } from "../publish-branches.
 import type { GitAppServices, Person } from "./context.js";
 import { resolveOwnApp } from "./own-app.js";
 import { pullRequestBody, pullRequestTitle } from "./pull-request-body.js";
-import type { AppHostApp } from "../app-host.js";
+import type { RegistryApp } from "../registry/registry.js";
 
 export interface OpenPullRequestInput {
   /** Branch under {@link GIT_PUBLISH_BRANCH_PREFIX} that the person pushed through the git proxy. */
@@ -62,7 +62,7 @@ export async function openPullRequest({
   input: OpenPullRequestInput;
   signal: AbortSignal;
 }): Promise<OpenPullRequestResult> {
-  let app: AppHostApp | null = null;
+  let app: RegistryApp | null = null;
   try {
     await authorizePerson(services.weldall, person.id, [services.scopes.publish]);
     app = await resolveOwnApp(services, person, appId);
@@ -86,7 +86,7 @@ export async function openPullRequest({
     await services.audit.success({
       eventType: "git_pull_request.opened",
       subject: person.id,
-      appId: app.id,
+      ...auditApp(app),
       details: {
         number: opened.number,
         webUrl: opened.webUrl,
@@ -129,8 +129,7 @@ export async function openPullRequest({
           : {}),
         reason: known ? error.message : "Opening the pull request failed unexpectedly.",
         subject: person.id,
-        appId: app?.id ?? null,
-        repository: null,
+        ...(app ? auditApp(app) : { appId: null, repository: null }),
         details: { headBranch: input.head ? auditText(input.head) : null },
       });
     throw error;

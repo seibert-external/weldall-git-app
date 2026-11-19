@@ -3,7 +3,11 @@
   "eventId": "0f3c4f0e-6a1b-4c1e-9d55-6b2f3c0d9a10",
   "eventType": "git_push.forwarded",
   "subject": "user-1",
-  "appId": "cm3k9x2f80001",
+  "appId": "app_0123456789abcdef0123",
+  "repository": {
+    "owner": "acme-apps",
+    "name": "app-expenses"
+  },
   "details": {
     "refUpdates": [
       {

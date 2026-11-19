@@ -1,4 +1,3 @@
-import type { AppHostApp } from "../app-host.js";
 import { authorizePerson } from "../access.js";
 import { GitAppError } from "../errors.js";
 import type {
@@ -11,7 +10,7 @@ import type {
 } from "../hosts/git-host.js";
 import { safeHttpsUrl, untrustedGitText } from "../git-text.js";
 import { GIT_PUBLISH_BRANCH_PREFIX, isPublishBranch } from "../publish-branches.js";
-import { weldallFailure } from "../weldall.js";
+import type { RegistryApp } from "../registry/registry.js";
 import type { GitAppServices, Person } from "./context.js";
 import { resolveOwnApp } from "./own-app.js";
 
@@ -104,8 +103,8 @@ function presentPullRequest(
  * Reads the status of one of the person's apps: its current pull request with reviews and
  * checks, and the preview and live links the CI reported. Without `branch`, the current pull request is the most recent open
  * one from a publish branch, else the most recently created one. A link the host reports is
- * written back to Weldall's registry (`updateApp`) when it differs from the stored one; when
- * Weldall does not take it, the call fails closed with 503.
+ * written to the app registry when it differs from the stored one; when the registry does not
+ * take it, the call fails closed with 503.
  */
 export async function readAppStatus({
   services,
@@ -122,7 +121,7 @@ export async function readAppStatus({
   signal: AbortSignal;
 }): Promise<AppStatusResult> {
   await authorizePerson(services.weldall, person.id, [services.scopes.publish]);
-  let app: AppHostApp = await resolveOwnApp(services, person, appId);
+  let app: RegistryApp = await resolveOwnApp(services, person, appId);
   const defaultBranch = app.defaultBranch;
   if (branch !== undefined && !isPublishBranch(branch, defaultBranch))
     throw new GitAppError(
@@ -158,12 +157,7 @@ export async function readAppStatus({
     ...(preview && preview !== app.links.preview ? { preview } : {}),
     ...(live && live !== app.links.live ? { live } : {}),
   };
-  if (Object.keys(changed).length)
-    try {
-      app = await services.weldall.updateApp(app.id, { links: changed });
-    } catch (error) {
-      throw weldallFailure(error, "store the app's links");
-    }
+  if (Object.keys(changed).length) app = await services.registry.updateLinks(app.id, changed);
   return {
     app: { id: app.id, name: app.name },
     pullRequest: status.pullRequest ? presentPullRequest(status.pullRequest, warnings) : null,

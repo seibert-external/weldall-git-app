@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createAdaptorServer } from "@hono/node-server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { LOGIN_SCOPE, type AppHostApp } from "../src/app-host.js";
+import { LOGIN_SCOPE } from "../src/app-host.js";
 import { createGitCredentialSigner } from "../src/git/credentials.js";
 import { createTransferLimiter, GIT_PROXY_LIMITS } from "../src/git/limits.js";
 import { pktLine } from "../src/git/pkt-line.js";
@@ -24,8 +24,9 @@ import { gitUnavailableReason, listen, runGit, startGitHttpBackend } from "./fix
 
 /**
  * The git proxy driven by the real git client through the Git app's own HTTP server
- * (`@hono/node-server`), against `git http-backend` as the Git host and the in-process fake
- * Weldall. Ported from the server's `git-proxy-db.test.ts`.
+ * (`@hono/node-server`), against `git http-backend` as the Git host, the in-process fake
+ * Weldall and the app registry on the test PostgreSQL server. Ported from the server's
+ * `git-proxy-db.test.ts`.
  */
 
 const skipReason = gitUnavailableReason();
@@ -78,6 +79,7 @@ const fakeHost: GitHost = {
     return pullRequests[branch] ?? null;
   },
   createRepository: () => Promise.reject(new Error("not used")),
+  inspectExistingRepository: () => Promise.reject(new Error("not used")),
   resolveNewRepository: () => {
     throw new Error("not used");
   },
@@ -95,26 +97,16 @@ const configuredHost: ConfiguredHost = {
 let gitApp: Awaited<ReturnType<typeof createTestGitApp>>;
 let limiter = createTransferLimiter(GIT_PROXY_LIMITS);
 
-function seedApp(id: string, owner: string, name: string, overrides: Partial<AppHostApp> = {}) {
-  const app: AppHostApp = {
+/** A ready app in the registry, unless `ready: false`. */
+function seedApp(id: string, owner: string, name: string, { ready = true } = {}) {
+  return gitApp.seed({
     id,
+    owner,
     name,
     purpose: "Test",
-    owner: { id: owner },
-    resource: "git-app",
     repository: { owner: ORGANIZATION, name, id: null, webUrl: null },
-    defaultBranch: "main",
-    template: { name: "react", commit: "c".repeat(40) },
-    ready: true,
-    links: { preview: null, live: null },
-    createdAt: "2026-11-01T00:00:00.000Z",
-    confirmedAt: null,
-    expiresAt: "2027-05-01T00:00:00.000Z",
-    state: "active",
-    ...overrides,
-  };
-  gitApp.weldall.apps.set(id, app);
-  return app;
+    template: { name: "react", commit: ready ? "c".repeat(40) : null },
+  });
 }
 
 const remote = (name = "app-demo", owner = ORGANIZATION) => `${base}/git/${owner}/${name}.git`;
@@ -270,31 +262,32 @@ describe.skipIf(skipReason !== null)(
     }, 30_000);
 
     afterAll(async () => {
+      await gitApp?.close();
       await new Promise((resolve) => gitAppServer?.close(resolve));
       await new Promise((resolve) => upstreamServer?.close(resolve));
       if (work) await rm(work, { recursive: true, force: true });
     });
 
-    const useProxy = (limits: Partial<typeof GIT_PROXY_LIMITS> = {}, shared?: typeof limiter) => {
+    const useProxy = async (
+      limits: Partial<typeof GIT_PROXY_LIMITS> = {},
+      shared?: typeof limiter,
+    ) => {
       limiter = shared ?? createTransferLimiter({ ...GIT_PROXY_LIMITS, ...limits });
-      gitApp.reset({ gitProxy: { limits, limiter } });
-      seedApp("app0001", "alice", "app-demo");
-      seedApp("app0002", "bob", "app-bobs");
-      seedApp("app0003", "alice", "app_x");
-      seedApp("app0004", "bob", "app-x");
-      seedApp("app0005", "alice", "app-new", {
-        ready: false,
-        template: { name: "react", commit: null },
-      });
+      await gitApp.reset({ gitProxy: { limits, limiter } });
+      await seedApp("app0001", "alice", "app-demo");
+      await seedApp("app0002", "bob", "app-bobs");
+      await seedApp("app0003", "alice", "app_x");
+      await seedApp("app0004", "bob", "app-x");
+      await seedApp("app0005", "alice", "app-new", { ready: false });
     };
 
-    beforeEach(() => {
+    beforeEach(async () => {
       resetPeople();
       pullRequests = {};
       forwardingCalls.length = 0;
       issued.length = 0;
       postsAtStart = receivePackPosts().length;
-      useProxy();
+      await useProxy();
     });
 
     afterEach(async () => {
@@ -662,11 +655,11 @@ describe.skipIf(skipReason !== null)(
       expect(forwardingCalls).toEqual([]);
     });
 
-    it("reports a refusal without the app when Weldall no longer knows the credential's app", async () => {
+    it("links a refusal to the credential's app also after the app left the registry", async () => {
       const dir = await cloneAs();
       await commitFile(dir, "gone.txt", "g\n");
       const password = await credential("alice", "read");
-      gitApp.weldall.apps.delete("app0001");
+      await gitApp.sql`DELETE FROM apps WHERE id = 'app0001'`;
       const pushed = await git(["push", "origin", `HEAD:refs/heads/${publish("gone")}`], {
         cwd: dir,
         password,
@@ -676,11 +669,11 @@ describe.skipIf(skipReason !== null)(
         .filter(({ method }) => method === "reportAuditEvent")
         .map(({ input }) => input as { eventType: string; appId: string | null })
         .filter(({ eventType }) => eventType === "git_push.denied");
-      // First with the credential's app (refused as unknown), then stored without it.
-      expect(reports.map(({ appId }) => appId)).toEqual(["app0001", null]);
+      // The credential is signed and names this repository and the person's app.
+      expect(reports.map(({ appId }) => appId)).toEqual(["app0001"]);
       expect(events("git_push.denied").at(-1)).toMatchObject({
         subject: "alice",
-        appId: null,
+        appId: "app0001",
         repository: { owner: ORGANIZATION, name: "app-demo" },
         reasonCode: "scope_not_granted",
       });
@@ -691,8 +684,7 @@ describe.skipIf(skipReason !== null)(
       const dir = await cloneAs();
       await commitFile(dir, "owner.txt", "o\n");
       const password = await credential("alice", "write");
-      const app = gitApp.weldall.apps.get("app0001")!;
-      gitApp.weldall.apps.set("app0001", { ...app, owner: { id: "bob" } });
+      await gitApp.sql`UPDATE apps SET owner_subject = 'bob' WHERE id = 'app0001'`;
       const pushed = await git(["push", "origin", `HEAD:refs/heads/${publish("owner")}`], {
         cwd: dir,
         password,
@@ -834,7 +826,7 @@ describe.skipIf(skipReason !== null)(
     }, 15_000);
 
     it("stops a push above the size limit before the host stores it", async () => {
-      useProxy({ pushMaxBytes: 64 * 1024 });
+      await useProxy({ pushMaxBytes: 64 * 1024 });
       const dir = await cloneAs();
       await commitFile(dir, "big.bin", randomBytes(256 * 1024));
       const pushed = await git(["push", "origin", `HEAD:refs/heads/${publish("big")}`], {
@@ -869,7 +861,7 @@ describe.skipIf(skipReason !== null)(
         maxConcurrentTransfers: 16,
         maxConcurrentTransfersPerUser: 1,
       });
-      useProxy({}, shared);
+      await useProxy({}, shared);
       const password = await credential("alice", "write");
       const read = await credential("alice", "read");
       // A push that never finishes its command list.
@@ -907,7 +899,7 @@ describe.skipIf(skipReason !== null)(
         maxConcurrentTransfers: 16,
         maxConcurrentTransfersPerUser: 1,
       });
-      useProxy({}, shared);
+      await useProxy({}, shared);
       const held = shared.acquire("alice");
       try {
         const response = await fetch(`${remote()}/info/refs?service=git-upload-pack`, {

@@ -28,7 +28,11 @@ describe("configuration", () => {
       },
       publicOrigin: GIT_APP_ORIGIN,
       resource: `${GIT_APP_ORIGIN}/api`,
-      scopes: { publish: "git-app:publish", admin: "git-app:admin" },
+      scopes: {
+        publish: "git-app:publish",
+        admin: "git-app:admin",
+        registryRead: "git-app:registry-read",
+      },
       port: 3002,
       weldall: { issuer: "https://weldall.example.com", machineClientId: "git-app-machine" },
     });
@@ -66,8 +70,29 @@ describe("configuration", () => {
       "WELDALL_MACHINE_CLIENT_ID is required.",
       "WELDALL_MACHINE_PRIVATE_JWK or WELDALL_MACHINE_PRIVATE_JWK_FILE is required.",
       "GIT_APP_GIT_CREDENTIAL_KEY or GIT_APP_GIT_CREDENTIAL_KEY_FILE is required.",
+      "GIT_APP_DATABASE_URL or GIT_APP_DATABASE_URL_FILE is required.",
     ])
       expect(error.problems).toContain(name);
+  });
+
+  it("reads the registry's database URL from a file and never echoes it", async () => {
+    const password = `pw-${Date.now()}`;
+    const url = `postgres://git_app:${password}@db.example.com:5432/git_app`;
+    const config = await loadConfig(
+      await testEnvironment({
+        GIT_APP_DATABASE_URL: undefined,
+        GIT_APP_DATABASE_URL_FILE: "/run/secrets/database-url",
+      }),
+      () => `${url}\n`,
+    );
+    expect(config.databaseUrl).toBe(url);
+    const invalid = await problems(
+      await testEnvironment({ GIT_APP_DATABASE_URL: `mysql://root:${password}@db.example.com/x` }),
+    );
+    expect(invalid.problems).toEqual([
+      expect.stringContaining("GIT_APP_DATABASE_URL must be a PostgreSQL connection URL"),
+    ]);
+    expect(invalid.message).not.toContain(password);
   });
 
   it("never puts a secret value into the error", async () => {
@@ -159,6 +184,7 @@ describe("configuration", () => {
     ],
     [{ GIT_APP_ADMIN_SCOPE: "Admin" }, "GIT_APP_ADMIN_SCOPE must be a scope key"],
     [{ GIT_APP_ADMIN_SCOPE: "git-app:publish" }, "must differ"],
+    [{ GIT_APP_REGISTRY_READ_SCOPE: "git-app:admin" }, "must differ"],
     [{ PORT: "70000" }, "PORT must be a TCP port number."],
     [
       { GIT_APP_GIT_CREDENTIAL_KEY: "too-short" },

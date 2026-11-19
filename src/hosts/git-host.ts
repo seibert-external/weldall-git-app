@@ -75,6 +75,11 @@ export interface GitHostWarning {
   message: string;
 }
 
+/** An existing repository, read for registering it as an app (`inspectExistingRepository`). */
+export interface ExistingRepository extends NewRepository {
+  warnings: GitHostWarning[];
+}
+
 export interface CreatedRepository extends NewRepository {
   /** Commit at the head of the default branch: the template state the local folder must match. */
   templateCommit: string;
@@ -250,6 +255,17 @@ export interface GitHost {
    * template and the requested name, so callers can check the app registry before creating.
    */
   resolveNewRepository(input: { template: string; name: string }): GitRepositoryRef;
+  /**
+   * Reads an existing repository of the organisation that was not created by this Git app (for
+   * example one created from a template on the host), so an administrator can register it as an
+   * app. It must be private and must not be a configured template. The same prerequisites as for
+   * a new repository are checked (reviewer team write access fails, missing branch rules warn);
+   * on Forgejo the bot user's admin right is lowered as after a creation.
+   */
+  inspectExistingRepository(
+    input: { name: string },
+    signal: AbortSignal,
+  ): Promise<ExistingRepository>;
   /** Target URL and authorization for forwarding git traffic to one repository. */
   getForwardingTarget(
     input: { repository: GitRepositoryRef; access: GitAccess },

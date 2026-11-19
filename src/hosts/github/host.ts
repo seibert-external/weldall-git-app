@@ -140,6 +140,10 @@ export function createGitHubAppHost({
       );
     },
     createRepository: (input, signal) => repositories.createRepository(input, signal),
+    async inspectExistingRepository(input, signal) {
+      assertRepository({ owner: config.organization, name: input.name });
+      return repositories.inspectExistingRepository(input, signal);
+    },
     resolveNewRepository: (input) => repositories.resolveNewRepository(input),
     async getForwardingTarget({ repository, access }, signal) {
       assertRepository(repository);

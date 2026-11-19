@@ -1,7 +1,9 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import { GitAppError } from "../../errors.js";
+import { refuseTemplate } from "../existing-repository.js";
 import type {
+  ExistingRepository,
   CreateRepositoryInput,
   CreatedRepository,
   GitHostWarning,
@@ -440,6 +442,21 @@ export function createGitHubRepositories({
     resolveNewRepository(input: { template: string; name: string }): GitRepositoryRef {
       templateFor(config, input.template);
       return { owner: organization, name: repositoryNameFor(config, input.name) };
+    },
+    async inspectExistingRepository(
+      input: { name: string },
+      signal: AbortSignal,
+    ): Promise<ExistingRepository> {
+      refuseTemplate(config.templates, organization, input.name);
+      const repository = await readExisting(input.name, signal);
+      const warnings = await checkBranchRules(repository.name, repository.default_branch, signal);
+      await checkReviewerTeam(repository.name, signal);
+      return {
+        repository: { owner: organization, name: repository.name, id: String(repository.id) },
+        defaultBranch: repository.default_branch,
+        webUrl: webUrl(repository.name),
+        warnings,
+      };
     },
     async createRepository(
       input: CreateRepositoryInput,

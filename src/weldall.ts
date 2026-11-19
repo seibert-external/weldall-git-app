@@ -1,15 +1,13 @@
 import { WeldallAuthError } from "@weldall/sdk";
-import type { AppHostApp, WeldallAppHostClient } from "./app-host.js";
+import type { WeldallAppHostClient } from "./app-host.js";
 import { GitAppError } from "./errors.js";
 
 /**
  * The part of Weldall's app host API (`createWeldallAppHostClient` in `./app-host.ts`) the Git app
- * uses. Tests pass an in-process fake implementing the same contract.
+ * uses: audit reports and the live permission check. The app registry is the Git app's own
+ * (`registry/`). Tests pass an in-process fake implementing the same contract.
  */
-export type AppHostApi = Pick<
-  WeldallAppHostClient,
-  "createApp" | "updateApp" | "lookupApp" | "reportAuditEvent" | "checkSubjectScopes"
->;
+export type AppHostApi = Pick<WeldallAppHostClient, "reportAuditEvent" | "checkSubjectScopes">;
 
 /** A Weldall error code, if `error` is a rejection from Weldall. */
 export const weldallCode = (error: unknown) =>
@@ -41,17 +39,4 @@ export function weldallFailure(error: unknown, what: string): GitAppError {
     `Weldall could not be reached to ${what}. Nothing was changed on the Git host by this step; retry later.`,
     503,
   );
-}
-
-/** Looks an app up; null when Weldall knows no app of this resource with that id or repository. */
-export async function lookupApp(
-  weldall: AppHostApi,
-  input: Parameters<AppHostApi["lookupApp"]>[0],
-): Promise<{ app: AppHostApp; ownedBySubject: boolean | null } | null> {
-  try {
-    return await weldall.lookupApp(input);
-  } catch (error) {
-    if (error instanceof WeldallAuthError && error.code === "not_found") return null;
-    throw weldallFailure(error, "look up the app");
-  }
 }

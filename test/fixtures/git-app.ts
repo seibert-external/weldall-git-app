@@ -2,6 +2,7 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { vi } from "vitest";
 import {
   JWT_DPOP_GRANT,
+  MACHINE_TOKEN_TYP,
   SKILL_ASSERTION_TYPE,
   createDpopProof,
   generateEs256KeyPair,
@@ -15,6 +16,8 @@ import { loadConfig, type GitAppConfig } from "../../src/config.js";
 import { openConfiguredHost, type ConfiguredHost } from "../../src/hosts/index.js";
 import { createInstallationTokenCache } from "../../src/hosts/github/tokens.js";
 import type { Logger } from "../../src/log.js";
+import { createAppRegistry, type AppRegistry } from "../../src/registry/registry.js";
+import { createTestDatabase, seedRegistryApp, testDatabaseUrl, type SeedApp } from "./database.js";
 import { createFakeWeldall, type FakeWeldall } from "./fake-weldall.js";
 
 export const WELDALL_ISSUER = "https://weldall.example.com";
@@ -23,6 +26,7 @@ export const GIT_APP_RESOURCE = `${GIT_APP_ORIGIN}/api`;
 export const DOWNSTREAM_CLIENT_ID = "weldall-cli-at-git-app";
 export const PUBLISH_SCOPE = "git-app:publish";
 export const ADMIN_SCOPE = "git-app:admin";
+export const REGISTRY_READ_SCOPE = "git-app:registry-read";
 
 /** The GitHub host configuration the GitHub fixtures (`github-api.ts`) answer for. */
 export const githubHostConfig = {
@@ -61,6 +65,7 @@ export async function testEnvironment(overrides: Record<string, string | undefin
     WELDALL_MACHINE_PRIVATE_JWK: jwk(machine.privateJwk),
     WELDALL_MACHINE_PUBLIC_JWK: jwk(machine.publicJwk),
     GIT_APP_GIT_CREDENTIAL_KEY: randomBytes(32).toString("base64"),
+    GIT_APP_DATABASE_URL: testDatabaseUrl(),
     ...overrides,
   } as Record<string, string | undefined>;
 }
@@ -78,9 +83,10 @@ export const people = {
 export type PersonName = keyof typeof people;
 
 /**
- * A Git app instance with a fake Weldall, the real GitHub driver (the global fetch is replaced by
- * a GitHub fixture per test) and access tokens obtained through the instance's own token
- * endpoint, as the CLI would get them.
+ * A Git app instance with a fake Weldall, the app registry in its own schema of the test
+ * PostgreSQL server, the real GitHub driver (the global fetch is replaced by a GitHub fixture per
+ * test) and access tokens obtained through the instance's own token endpoint, as the CLI would
+ * get them.
  */
 export async function createTestGitApp(
   options: {
@@ -99,6 +105,22 @@ export async function createTestGitApp(
     logs.push({ level, message, fields: fields ?? {} });
   const holders = options.people ?? people;
   let weldall: FakeWeldall = createFakeWeldall({ resource: GIT_APP_RESOURCE, people: holders });
+  let database = await createTestDatabase();
+  let registry: AppRegistry = createAppRegistry({ sql: database.sql });
+  /** Registry methods the services called, in order, and errors queued for the next calls. */
+  const registryCalls: Array<keyof AppRegistry> = [];
+  const registryFailures = new Map<keyof AppRegistry, unknown[]>();
+  /** The current registry, recording calls and throwing queued failures. */
+  const observedRegistry = new Proxy({} as AppRegistry, {
+    get(_, key: keyof AppRegistry) {
+      return async (...args: unknown[]) => {
+        registryCalls.push(key);
+        const queued = registryFailures.get(key);
+        if (queued?.length) throw queued.shift();
+        return (registry[key] as (...input: unknown[]) => Promise<unknown>)(...args);
+      };
+    },
+  });
   let gitProxy = options.gitProxy;
   let app = build();
   let eventCount = 0;
@@ -106,6 +128,7 @@ export async function createTestGitApp(
   function build() {
     return createGitApp({
       config,
+      registry: observedRegistry,
       weldall: weldall.api,
       host:
         options.host?.(config) ??
@@ -205,20 +228,89 @@ export async function createTestGitApp(
     return { status: response.status, json: (await response.json()) as any };
   }
 
+  /**
+   * Calls the Git app as a Weldall machine client (the customer's own tool) with a machine token
+   * Weldall would issue for this resource, and a fresh DPoP proof.
+   */
+  async function machineCall(
+    path: string,
+    { scopes = [REGISTRY_READ_SCOPE], clientId = "registry-export" } = {},
+  ) {
+    const now = Math.floor(Date.now() / 1_000);
+    const token = await signEs256(
+      {
+        iss: WELDALL_ISSUER,
+        sub: `machine:${clientId}`,
+        aud: GIT_APP_RESOURCE,
+        client_id: clientId,
+        azp: clientId,
+        identity_type: "machine",
+        token_type: "machine",
+        scope: scopes.join(" "),
+        cnf: { jkt: deviceKey.jkt },
+        iat: now,
+        exp: now + 300,
+        jti: `machine-${randomBytes(8).toString("hex")}`,
+      },
+      { kid: "weldall-1", privateJwk: weldallKey.privateJwk, typ: MACHINE_TOKEN_TYP },
+    );
+    const url = `${GIT_APP_ORIGIN}${path}`;
+    const proof = await createDpopProof({
+      ...(deviceKey as DpopKeyPair),
+      method: "GET",
+      url: url.split("?")[0]!,
+      accessToken: token,
+    });
+    const previous = globalThis.fetch;
+    vi.stubGlobal("fetch", withWeldallDiscovery(previous));
+    try {
+      const response = await app.request(url, {
+        headers: { authorization: `DPoP ${token}`, dpop: proof },
+      });
+      return { status: response.status, json: (await response.json()) as any };
+    } finally {
+      vi.stubGlobal("fetch", previous);
+    }
+  }
+
   return {
     config,
     logs,
     call,
+    machineCall,
     get weldall() {
       return weldall;
     },
-    /** A fresh fake Weldall and instance, keeping keys and issued tokens. */
-    reset(next: { gitProxy?: CreateGitAppOptions["gitProxy"] } = {}) {
+    /** The instance's app registry (direct, not recorded). */
+    get registry() {
+      return registry;
+    },
+    /** Registry methods the services called since the last reset. */
+    registryCalls,
+    /** Makes the next calls of a registry method throw `errors`, in order. */
+    failRegistry(method: keyof AppRegistry, ...errors: unknown[]) {
+      registryFailures.set(method, [...(registryFailures.get(method) ?? []), ...errors]);
+    },
+    /** The registry's database (its own schema). */
+    get sql() {
+      return database.sql;
+    },
+    /** Writes an app straight into the registry. */
+    seed: (seed: SeedApp) => seedRegistryApp(database.sql, seed),
+    /** A fresh fake Weldall, registry and instance, keeping keys and issued tokens. */
+    async reset(next: { gitProxy?: CreateGitAppOptions["gitProxy"] } = {}) {
+      await database.close();
+      database = await createTestDatabase();
+      registry = createAppRegistry({ sql: database.sql });
       weldall = createFakeWeldall({ resource: GIT_APP_RESOURCE, people: holders });
       gitProxy = next.gitProxy ?? options.gitProxy;
       app = build();
       logs.length = 0;
+      registryCalls.length = 0;
+      registryFailures.clear();
     },
+    /** Ends the registry's pool and drops its schema. */
+    close: () => database.close(),
     request: (input: string, init?: RequestInit) => app.request(input, init),
     /** Fetches the skill catalog as Weldall's skill discovery does, with a signed assertion. */
     async skillCatalog(claims: Record<string, unknown> = {}) {

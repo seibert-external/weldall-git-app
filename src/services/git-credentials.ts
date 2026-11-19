@@ -3,7 +3,8 @@ import { GitAppError } from "../errors.js";
 import { GIT_CREDENTIAL_USERNAME, type GitCredentialSigner } from "../git/credentials.js";
 import { parseGitRemotePath, type GitRepositoryPath } from "../git/paths.js";
 import type { GitAccess } from "../hosts/git-host.js";
-import { lookupApp } from "../weldall.js";
+import { auditApp } from "../audit.js";
+import type { RegistryApp } from "../registry/registry.js";
 import type { GitAppServices, Person } from "./context.js";
 
 /** One git command asks for one credential; a publish needs two (fetch, push). */
@@ -56,8 +57,8 @@ export function createIssueLimiter(limit = GIT_CREDENTIAL_ISSUE_LIMIT_PER_MINUTE
 export type IssueLimiter = ReturnType<typeof createIssueLimiter>;
 
 /**
- * Issues a short-lived git credential for one of the person's apps. Order: Weldall confirms the login permission and the publish scope,
- * then the app registry confirms that the repository belongs to a ready app of the person, and
+ * Issues a short-lived git credential for one of the person's apps. Order: Weldall confirms the
+ * login permission and the publish scope, then the app registry confirms that the repository belongs to a ready app of the person, and
  * `git_credential.issued` must be stored in Weldall before the credential is returned, so no
  * credential exists without its audit entry. Read access unless write is asked for explicitly.
  */
@@ -77,7 +78,7 @@ export async function issueGitCredential({
   now?: () => number;
 }): Promise<IssuedGitCredential> {
   let path: GitRepositoryPath | null = null;
-  let ownAppId: string | null = null;
+  let ownApp: RegistryApp | null = null;
   // Reserved before the first await; given back in the catch, where nothing was issued.
   const reservation = limiter.reserve(person.id, now());
   try {
@@ -94,14 +95,10 @@ export async function issueGitCredential({
         "invalid_request",
         "Expected a git path like git/<owner>/<repository>.git.",
       );
-    const found = await lookupApp(services.weldall, {
-      app: { repositoryOwner: path.owner, repositoryName: path.name },
-      subject: person.id,
-    });
-    if (!found || found.ownedBySubject !== true)
+    const app = await services.registry.byRepository(path);
+    if (!app || app.owner.id !== person.id)
       throw new GitAppError("not_found", "No app of yours uses this repository.", 404);
-    const { app } = found;
-    ownAppId = app.id;
+    ownApp = app;
     if (app.repository.owner.toLowerCase() !== services.host.organization.toLowerCase())
       throw new GitAppError(
         "invalid_target",
@@ -124,7 +121,7 @@ export async function issueGitCredential({
     await services.audit.success({
       eventType: "git_credential.issued",
       subject: person.id,
-      appId: app.id,
+      ...auditApp(app),
       details: {
         credentialId: credential.id,
         access: credential.access,
@@ -150,8 +147,9 @@ export async function issueGitCredential({
         subject: person.id,
         // Another owner's app is never linked to this person's rejection; the repository is
         // named as the person asked for it.
-        appId: ownAppId,
-        repository: ownAppId || !path ? null : { owner: path.owner, name: path.name },
+        ...(ownApp
+          ? auditApp(ownApp)
+          : { appId: null, repository: path && { owner: path.owner, name: path.name } }),
         details: { access: input.access },
       });
     throw error;

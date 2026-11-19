@@ -20,7 +20,16 @@ import { createIssueLimiter, issueGitCredential } from "./services/git-credentia
 import { resolveOwnApp } from "./services/own-app.js";
 import { PULL_REQUEST_BODY_LIMIT, PULL_REQUEST_TITLE_LIMIT } from "./services/pull-request-body.js";
 import { openPullRequest } from "./services/pull-requests.js";
+import {
+  confirmOwnApp,
+  listAllApps,
+  listOwnApps,
+  listRegistryPage,
+  registerExistingApp,
+  registerExistingBody,
+} from "./services/registry-api.js";
 import { readAppStatus } from "./services/status.js";
+import type { AppRegistry } from "./registry/registry.js";
 import { gitAppSkills } from "./skills.js";
 import type { AppHostApi } from "./weldall.js";
 
@@ -56,6 +65,8 @@ type Env = { Variables: WeldallVariables };
 
 export interface CreateGitAppOptions {
   config: GitAppConfig;
+  /** The app registry on the instance's database (`registry/`). */
+  registry: AppRegistry;
   /** Weldall's app host API; defaults to the SDK client with the configured machine client. */
   weldall?: AppHostApi;
   /** The opened Git host; defaults to the configured one. */
@@ -70,7 +81,8 @@ export interface CreateGitAppOptions {
 /**
  * The Git app: a resource secured with `@weldall/sdk` (its own authorization server for Weldall's
  * ID-JAG exchange, DPoP-protected routes with scope policies) that keeps apps' repositories on
- * one Git host and uses Weldall's app host API for registry, ownership, permissions and audit.
+ * one Git host and the app registry in its own database, and uses Weldall's app host API for
+ * permission checks and audit.
  */
 export function createGitApp(options: CreateGitAppOptions) {
   const { config } = options;
@@ -89,6 +101,7 @@ export function createGitApp(options: CreateGitAppOptions) {
   const services: GitAppServices = {
     host,
     weldall,
+    registry: options.registry,
     audit: createAuditReporter({
       weldall,
       log,
@@ -102,7 +115,7 @@ export function createGitApp(options: CreateGitAppOptions) {
     resource: config.resource,
     publicOrigin: config.publicOrigin,
     clientId: config.downstreamClientId,
-    supportedScopes: [config.scopes.publish, config.scopes.admin],
+    supportedScopes: [config.scopes.publish, config.scopes.admin, config.scopes.registryRead],
     signingKey: config.signingKey,
     // One instance per host: proofs are replay-checked in memory. Several replicas need a shared store.
     replayStore: inMemory(),
@@ -132,7 +145,7 @@ export function createGitApp(options: CreateGitAppOptions) {
     const caller: AuthContext = auth.getAuth(context);
     if (caller.identityType !== "user")
       throw new GitAppError("access_denied", "Apps are owned by people; sign in as a user.", 403);
-    return { id: caller.subject };
+    return { id: caller.subject, email: caller.email };
   };
   const handle =
     (handler: (context: Context<Env>) => Promise<unknown>) => async (context: Context<Env>) => {
@@ -144,6 +157,66 @@ export function createGitApp(options: CreateGitAppOptions) {
     };
   const publish = auth.protect({ scopes: [config.scopes.publish] });
   const admin = auth.protect({ scopes: [config.scopes.admin] });
+  const registryRead = auth.protect({ scopes: [config.scopes.registryRead] });
+
+  /** The person's own apps from the app registry, with their re-verification state. */
+  app.get(
+    "/api/apps",
+    publish,
+    handle(async (c) => listOwnApps({ services, person: personOf(c), resource: config.resource })),
+  );
+  /** The owner confirms that one of their apps is still needed (re-verification). Takes no body. */
+  app.post(
+    "/api/apps/:id/confirm",
+    publish,
+    handle(async (c) =>
+      confirmOwnApp({ services, person: personOf(c), appId: c.req.param("id") ?? "" }),
+    ),
+  );
+  /** Every app of the registry, for administrators. */
+  app.get(
+    "/api/admin/apps",
+    admin,
+    handle(async (c) =>
+      listAllApps({
+        services,
+        person: personOf(c),
+        parameters: new URL(c.req.url).searchParams,
+        resource: config.resource,
+      }),
+    ),
+  );
+  /** An administrator registers an existing repository of the organisation as a person's app. */
+  app.post(
+    "/api/admin/apps",
+    admin,
+    handle(async (c) =>
+      registerExistingApp({
+        services,
+        person: personOf(c),
+        input: await jsonBody(c.req.raw, registerExistingBody),
+        signal: c.req.raw.signal,
+      }),
+    ),
+  );
+  /** The whole registry for the customer's own tools: machine clients only, read-only. */
+  app.get(
+    "/api/registry/apps",
+    registryRead,
+    handle(async (c) => {
+      if (auth.getAuth(c).identityType !== "machine")
+        throw new GitAppError(
+          "access_denied",
+          "This API is for machine clients; administrators use /api/admin/apps.",
+          403,
+        );
+      return listRegistryPage({
+        services,
+        parameters: new URL(c.req.url).searchParams,
+        resource: config.resource,
+      });
+    }),
+  );
 
   /**
    * Creates the repository for the person's new app from a template and registers it in Weldall.
@@ -162,7 +235,7 @@ export function createGitApp(options: CreateGitAppOptions) {
       return { ...created, git: gitRemote(created.repository) };
     }),
   );
-  /** One of the person's apps as Weldall's registry has it. Listing stays in Weldall (`/api/me/apps`). */
+  /** One of the person's apps as the registry has it, with this instance's git remote. */
   app.get(
     "/api/apps/:id",
     publish,
@@ -172,7 +245,8 @@ export function createGitApp(options: CreateGitAppOptions) {
       const own = await resolveOwnApp(services, person, c.req.param("id") ?? "", {
         requireReady: false,
       });
-      return { app: own, git: gitRemote(own.repository) };
+      const { registeredBy: _registeredBy, confirmedBy: _confirmedBy, ...app } = own;
+      return { app, git: gitRemote(own.repository) };
     }),
   );
   /** Opens the pull request of one of the person's apps from a publish branch. */

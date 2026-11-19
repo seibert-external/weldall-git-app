@@ -1,10 +1,8 @@
-import { appIdSchema } from "../app-host.js";
 import { authorizePerson } from "../access.js";
 import { auditList } from "../audit.js";
 import { GitAppError } from "../errors.js";
 import type { GitHostCheck, GitHostCheckRepository } from "../hosts/git-host.js";
 import type { HostKind } from "../hosts/index.js";
-import { lookupApp } from "../weldall.js";
 import type { GitAppServices, Person } from "./context.js";
 
 export interface ChecklistReport {
@@ -41,20 +39,18 @@ export async function runChecklist({
   const started = performance.now();
   let repository: GitHostCheckRepository | null = null;
   if (appId !== undefined) {
-    const found = appIdSchema.safeParse(appId).success
-      ? await lookupApp(services.weldall, { app: { id: appId } })
-      : null;
+    const found = await services.registry.byId(appId);
     if (!found) throw new GitAppError("not_found", "No app of this Git app has this id.", 404);
-    if (!found.app.ready)
+    if (!found.ready)
       throw new GitAppError(
         "repository_not_ready",
         "The app's repository is still being created; name a ready app.",
         409,
       );
     repository = {
-      owner: found.app.repository.owner,
-      name: found.app.repository.name,
-      defaultBranch: found.app.defaultBranch,
+      owner: found.repository.owner,
+      name: found.repository.name,
+      defaultBranch: found.defaultBranch,
     };
   }
   const checks = await services.host.host.checkSetup({ repository }, signal);

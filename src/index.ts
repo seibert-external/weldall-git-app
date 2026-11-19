@@ -22,7 +22,7 @@ try {
 } catch (error) {
   failStart(error);
 }
-const { config, app } = prepared;
+const { config, app, database } = prepared;
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) =>
   jsonLogger("info", "Git app listening", {
     port,
@@ -44,6 +44,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const)
     jsonLogger("info", "Git app stopping", { signal });
     // No exit in the close callback: completion audits of finished transfers are sent without
     // being awaited, so the process ends when the event loop drains, at the latest after the grace.
-    server.close();
+    // The registry's pool is closed once no request runs any more.
+    server.close(() => void database.end({ timeout: 5 }).catch(() => {}));
     setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS).unref();
   });

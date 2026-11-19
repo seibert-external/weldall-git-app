@@ -96,10 +96,37 @@ describe("start-up", () => {
     expect(startupErrorMessage(new Error("detail"))).toBe("Invalid Git app configuration.");
   });
 
-  it("builds the app from a valid configuration", async () => {
+  it("builds the app from a valid configuration and migrates the registry's database", async () => {
     const { prepareGitApp } = await import("../src/start.js");
-    const { config, app } = await prepareGitApp(await testEnvironment());
-    expect(config.publicOrigin).toBe("https://git-app.example.com");
-    expect((await app.request("/health")).status).toBe(200);
+    const { config, app, database } = await prepareGitApp(await testEnvironment());
+    try {
+      expect(config.publicOrigin).toBe("https://git-app.example.com");
+      expect((await app.request("/health")).status).toBe(200);
+      const [row] = await database`SELECT count(*)::int AS count FROM schema_migrations`;
+      expect(row?.count).toBeGreaterThanOrEqual(1);
+    } finally {
+      await database.end();
+    }
   });
+
+  it("ends an unreachable database with a clean error naming only the variable", async () => {
+    // A free loopback port nobody listens on.
+    blocker = createServer();
+    await new Promise<void>((resolve) => blocker!.listen(0, "127.0.0.1", resolve));
+    const port = (blocker.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => blocker!.close(() => resolve()));
+    blocker = undefined;
+    const password = `pw-${process.pid}`;
+    const env = await testEnvironment({
+      GIT_APP_DATABASE_URL: `postgres://git_app:${password}@127.0.0.1:${port}/git_app`,
+    });
+    const result = await runEntryPoint(env);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "The app registry database (GIT_APP_DATABASE_URL) could not be reached or migrated (ECONNREFUSED).",
+    );
+    expect(result.stderr).not.toContain(password);
+    expect(result.stderr).not.toMatch(/\n\s+at /);
+    expect(result.stdout).not.toContain("Git app listening");
+  }, 30_000);
 });
