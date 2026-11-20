@@ -75,7 +75,7 @@ describe("service", () => {
 });
 
 describe("request bodies", () => {
-  const limit = 32_000;
+  const limit = 128_000;
   /** A body that never ends, recording how much of it the Git app pulled. */
   function endlessBody() {
     const state = { pulled: 0, cancelled: false };

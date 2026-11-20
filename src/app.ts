@@ -33,7 +33,9 @@ import type { AppRegistry } from "./registry/registry.js";
 import { gitAppSkills } from "./skills.js";
 import type { AppHostApi } from "./weldall.js";
 
-const MAX_BODY_BYTES = 32_000;
+// A pull request body may hold 16,000 characters; escaped in JSON (`\uXXXX`, `\n`) that can reach
+// about 96 KB, so the limit leaves room for it and the other fields.
+const MAX_BODY_BYTES = 128_000;
 const privateHeaders = { "cache-control": "no-store", pragma: "no-cache" } as const;
 
 const text = (maximum: number) =>
