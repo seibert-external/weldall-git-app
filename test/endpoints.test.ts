@@ -74,6 +74,62 @@ describe("service", () => {
   });
 });
 
+describe("request bodies", () => {
+  const limit = 32_000;
+  /** A body that never ends, recording how much of it the Git app pulled. */
+  function endlessBody() {
+    const state = { pulled: 0, cancelled: false };
+    const chunk = new TextEncoder().encode(`{"purpose":"${"x".repeat(4_000)}`);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        state.pulled += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    });
+    return { stream, state };
+  }
+
+  it("refuses a declared length above the limit with 413 before reading the body", async () => {
+    const github = mockGitHub();
+    const { stream, state } = endlessBody();
+    const refused = await gitApp.call("alice", "POST", "/api/apps", {
+      rawBody: stream,
+      headers: { "content-length": String(limit + 1) },
+    });
+    expect(refused).toMatchObject({ status: 413, json: { error: "request_too_large" } });
+    // A stream may buffer its first chunk on its own; nothing beyond it was asked for.
+    expect(state.pulled).toBeLessThanOrEqual(8_000);
+    expect(github.calls).toEqual([]);
+  });
+
+  it.each([
+    ["without a Content-Length", {}],
+    ["with a Content-Length that understates it", { "content-length": "100" }],
+  ])("stops reading an oversized body %s and answers 413", async (_, headers) => {
+    const github = mockGitHub();
+    const { stream, state } = endlessBody();
+    const refused = await gitApp.call("alice", "POST", "/api/apps", { rawBody: stream, headers });
+    expect(refused).toMatchObject({ status: 413, json: { error: "request_too_large" } });
+    expect(state.pulled).toBeGreaterThan(limit);
+    expect(state.pulled).toBeLessThanOrEqual(limit + 3 * 4_100);
+    expect(state.cancelled).toBe(true);
+    expect(github.calls).toEqual([]);
+  });
+
+  it("accepts a body up to the limit", async () => {
+    mockGitHub();
+    const body = JSON.stringify(create());
+    const { status } = await gitApp.call("alice", "POST", "/api/apps", {
+      rawBody: body,
+      headers: { "content-length": String(Buffer.byteLength(body)) },
+    });
+    expect(status).toBe(200);
+  });
+});
+
 describe("POST /api/apps", () => {
   it("checks Weldall and the registry first, creates the repository, registers, audits and only then marks it ready", async () => {
     const github = mockGitHub();

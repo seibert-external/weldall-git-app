@@ -206,7 +206,18 @@ export async function createTestGitApp(
     person: PersonName | (string & {}),
     method: "GET" | "POST",
     path: string,
-    { body, scopes = defaultScopes(person) }: { body?: unknown; scopes?: string[] } = {},
+    {
+      body,
+      rawBody,
+      headers = {},
+      scopes = defaultScopes(person),
+    }: {
+      body?: unknown;
+      /** Sent as is (with `content-type: application/json`) instead of `body`. */
+      rawBody?: ReadableStream<Uint8Array> | string;
+      headers?: Record<string, string>;
+      scopes?: string[];
+    } = {},
   ) {
     const token = await tokenFor(person, scopes);
     const url = `${GIT_APP_ORIGIN}${path}`;
@@ -221,10 +232,17 @@ export async function createTestGitApp(
       headers: {
         authorization: `DPoP ${token}`,
         dpop: proof,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...(body === undefined && rawBody === undefined
+          ? {}
+          : { "content-type": "application/json" }),
+        ...headers,
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+      ...(rawBody !== undefined
+        ? { body: rawBody, duplex: "half" }
+        : body === undefined
+          ? {}
+          : { body: JSON.stringify(body) }),
+    } as RequestInit);
     return { status: response.status, json: (await response.json()) as any };
   }
 

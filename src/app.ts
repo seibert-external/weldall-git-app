@@ -318,15 +318,41 @@ export function createGitApp(options: CreateGitAppOptions) {
   return app;
 }
 
+const bodyTooLarge = () =>
+  new GitAppError("request_too_large", "The request body is too large.", 413);
+
+/**
+ * Reads at most `maximum` bytes of the body: a declared length above it is refused before
+ * reading, and the stream is cancelled as soon as more arrives (no or a wrong `Content-Length`).
+ */
+async function boundedText(request: Request, maximum: number): Promise<string> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && !(/^\d+$/.test(declared.trim()) && Number(declared) <= maximum))
+    throw bodyTooLarge();
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maximum) {
+      await reader.cancel().catch(() => {});
+      throw bodyTooLarge();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** Reads a bounded JSON body; any mismatch is `400 invalid_request` without echoing the input. */
 async function jsonBody<T extends z.ZodType>(request: Request, schema: T): Promise<z.output<T>> {
   if (
     request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json"
   )
     throw new GitAppError("invalid_request", "JSON required.");
-  const raw = await request.text();
-  if (Buffer.byteLength(raw) > MAX_BODY_BYTES)
-    throw new GitAppError("invalid_request", "The request body is too large.");
+  const raw = await boundedText(request, MAX_BODY_BYTES);
   try {
     return schema.parse(JSON.parse(raw));
   } catch {
