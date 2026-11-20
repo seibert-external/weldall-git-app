@@ -250,6 +250,8 @@ export function createInstallationTokenCache({ now = Date.now }: { now?: () => n
         throw upstreamError(422, "token");
       const inFlight = pending.get(key);
       if (inFlight) return untilAborted(inFlight, input.signal);
+      // An aborted caller must not start a shared request nobody would wait for.
+      input.signal.throwIfAborted();
       const minted = request({
         app: input.app,
         installationId,
@@ -273,6 +275,9 @@ export function createInstallationTokenCache({ now = Date.now }: { now?: () => n
           },
         )
         .finally(() => pending.delete(key));
+      // Callers that stop waiting leave the shared request unobserved; its failure is theirs to
+      // see through `untilAborted`, never an unhandled rejection.
+      minted.catch(() => {});
       pending.set(key, minted);
       return untilAborted(minted, input.signal);
     },

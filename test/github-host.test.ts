@@ -343,6 +343,50 @@ describe("installation tokens", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("asks GitHub nothing for a caller that already gave up, and leaves no unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const { calls } = mockGitHub();
+      const aborted = new AbortController();
+      aborted.abort(new Error("gave up"));
+      await expect(
+        createInstallationTokenCache().mint({
+          app,
+          loadPrivateKey,
+          repository: "app-one",
+          permissions: { contents: "write" },
+          signal: aborted.signal,
+        }),
+      ).rejects.toThrow("gave up");
+      expect(calls).toEqual([]);
+
+      // A caller that stops waiting while the shared request later fails.
+      let fail!: (response: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise<Response>((resolve) => (fail = resolve))),
+      );
+      const leaving = new AbortController();
+      const pending = createInstallationTokenCache().mint({
+        app,
+        loadPrivateKey,
+        repository: "app-one",
+        permissions: { contents: "write" },
+        signal: leaving.signal,
+      });
+      await vi.waitFor(() => expect(fail).toBeDefined());
+      leaving.abort(new Error("left"));
+      await expect(pending).rejects.toThrow("left");
+      fail(Response.json({ message: "Server error" }, { status: 500 }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("resolves and caches the installation from the organisation when no ID is configured", async () => {
     const { calls } = mockGitHub();
     const cache = createInstallationTokenCache();
