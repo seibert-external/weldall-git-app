@@ -17,6 +17,16 @@ export const PULL_REQUEST_BODY_LIMIT = 16_000;
 export const PUBLISH_TRIGGER_MARKER = "<!-- weldall:published-by -->";
 const markerPattern = /<!--\s*weldall:published-by\s*-->/gi;
 
+/** Removes the marker until none is left, so nested copies cannot reassemble one. */
+function withoutMarkers(value: string): string {
+  let previous: string;
+  do {
+    previous = value;
+    value = value.replace(markerPattern, "");
+  } while (value !== previous);
+  return value;
+}
+
 /**
  * Look-alike folding for matching only: compatibility forms, accents, case, common Cyrillic and
  * Greek homoglyphs and digit look-alikes collapse to plain Latin letters; everything else is
@@ -117,8 +127,9 @@ export function pullRequestTitle(value: string): string {
  * characters, are removed.
  */
 export function pullRequestBody(value: string, person: { id: string }): string {
-  const body = withoutHiddenCharacters(withoutControls(value).slice(0, PULL_REQUEST_BODY_LIMIT))
-    .replace(markerPattern, "")
+  const body = withoutMarkers(
+    withoutHiddenCharacters(withoutControls(value).slice(0, PULL_REQUEST_BODY_LIMIT)),
+  )
     .split("\n")
     .filter((line) => !imitatesTrigger(line))
     .join("\n")

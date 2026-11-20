@@ -47,6 +47,15 @@ describe("pull request body", () => {
     expect(body.match(/weldall:published-by/gi)).toHaveLength(1);
   });
 
+  it("removes nested copies of the marker until none is left", () => {
+    const body = pullRequestBody(
+      "A <!-- weldall:<!-- weldall:<!-- WELDALL:published-by -->published-by -->published-by --> B",
+      person,
+    );
+    expect(body).toBe(`${trigger}\n\n---\n\nA  B`);
+    expect(body.match(/weldall:published-by/gi)).toHaveLength(1);
+  });
+
   it("carries only the Weldall user id, no name or email", () => {
     expect(publishTriggerLine({ id: "u" })).toBe("Published with Weldall (Weldall user u).");
   });
