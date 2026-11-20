@@ -18,11 +18,19 @@ export function truncateText(value: string, maximum: number): string {
  * bounded, credential-free and free of control characters.
  */
 
-/** C0/C1 controls except tab and newline, plus Unicode format characters that reorder or hide text. */
+/**
+ * Everything invisible except tab and newline: controls (Cc), format characters (Cf: zero-width,
+ * bidi overrides, soft hyphen, Unicode tag characters U+E0000-E007F), private use (Co),
+ * unassigned code points (Cn), lone surrogates (Cs), line and paragraph separators (Zl, Zp),
+ * variation selectors (U+FE00-FE0F, U+E0100-E01EF, Mongolian U+180B-180F), the combining
+ * grapheme joiner and the Hangul fillers, which render as nothing. Visible letters of every
+ * script stay. Such characters could carry hidden instructions to the agent or split a
+ * credential so that redaction misses it.
+ */
 const hiddenOrControl =
-  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]/g;
+  /(?![\t\n])[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;
 
-/** Removes control characters (except tab and newline) and invisible formatting characters. */
+/** Removes control characters (except tab and newline) and invisible characters. */
 export const withoutHiddenCharacters = (value: string) => value.replace(hiddenOrControl, "");
 
 /**
@@ -37,7 +45,9 @@ export function untrustedGitText(
 ): string {
   // Hidden characters go first so they cannot split a token past redaction; line breaks stay
   // until after redaction so multi-line PEM blocks are still recognised as a whole.
-  let text = redactCredentials(value.replace(/\r\n?/g, "\n").replace(hiddenOrControl, ""));
+  let text = redactCredentials(
+    withoutHiddenCharacters(value.replace(/\r\n?|[\u2028\u2029]/g, "\n")),
+  );
   text = multiline
     ? text
         .replace(/\t/g, "  ")
