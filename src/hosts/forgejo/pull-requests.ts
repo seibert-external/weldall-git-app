@@ -77,13 +77,17 @@ const reviewStates: Record<string, PullRequestReview["state"] | undefined> = {
   COMMENT: "commented",
 };
 
-/** Forgejo's commit status values folded into the host-neutral outcome. */
+/**
+ * Forgejo's commit status values (`modules/structs/commit_status.go`: pending, success, error,
+ * failure, warning, skipped) folded into the host-neutral outcome. A value Forgejo adds later is
+ * reported as neutral rather than as a failure the person did not cause.
+ */
 function statusState(status: string): PullRequestCheck["state"] {
   if (status === "success") return "success";
   if (status === "pending") return "pending";
-  if (status === "warning") return "neutral";
-  // failure, error and anything new.
-  return "failure";
+  if (status === "failure" || status === "error") return "failure";
+  // warning, skipped and anything new.
+  return "neutral";
 }
 
 const permissionMissing = () =>

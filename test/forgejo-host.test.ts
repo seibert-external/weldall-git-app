@@ -411,6 +411,9 @@ describe("status", () => {
             },
             { context: "ci/lint", status: "failure", target_url: "https://ci.example.com/2" },
             { context: "ci/warn", status: "warning", target_url: "javascript:alert(1)" },
+            { context: "ci/deploy", status: "skipped", target_url: null },
+            { context: "ci/infra", status: "error", target_url: null },
+            { context: "ci/future", status: "something-new", target_url: null },
             {
               context: "weldall/preview",
               status: "success",
@@ -453,6 +456,9 @@ describe("status", () => {
       },
       { name: "ci/lint", state: "failure", detailsUrl: "https://ci.example.com/2" },
       { name: "ci/warn", state: "neutral", detailsUrl: null },
+      { name: "ci/deploy", state: "neutral", detailsUrl: null },
+      { name: "ci/infra", state: "failure", detailsUrl: null },
+      { name: "ci/future", state: "neutral", detailsUrl: null },
       { name: "weldall/preview", state: "success", detailsUrl: "https://preview.example.com/" },
     ]);
   });
