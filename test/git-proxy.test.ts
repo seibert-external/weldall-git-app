@@ -4,6 +4,7 @@ import { request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { createAdaptorServer } from "@hono/node-server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { LOGIN_SCOPE } from "../src/app-host.js";
@@ -912,6 +913,32 @@ describe.skipIf(skipReason !== null)(
       } finally {
         if ("release" in held) held.release();
       }
+    });
+
+    it("forwards a gzip fetch request as git sends it and refuses other encodings", async () => {
+      const head = await upstreamRef("refs/heads/main");
+      const negotiation = Buffer.concat([
+        pktLine(`want ${head}\n`),
+        Buffer.from("0000"),
+        pktLine("done\n"),
+      ]);
+      const post = async (encoding: string, body: Buffer) =>
+        fetch(`${remote()}/git-upload-pack`, {
+          method: "POST",
+          headers: {
+            authorization: basic(await credential("alice", "read")),
+            "content-type": "application/x-git-upload-pack-request",
+            "content-encoding": encoding,
+          },
+          body: new Uint8Array(body),
+        });
+      const gzipped = await post("gzip", gzipSync(negotiation));
+      expect(gzipped.status).toBe(200);
+      expect(Buffer.from(await gzipped.arrayBuffer()).includes(Buffer.from("PACK"))).toBe(true);
+      const brotli = await post("br", negotiation);
+      expect(brotli.status).toBe(415);
+      expect(await brotli.text()).toContain("unsupported request encoding");
+      await expect.poll(() => limiter.active).toBe(0);
     });
 
     it("propagates a client abort mid-push to the host and frees the transfer slot", async () => {

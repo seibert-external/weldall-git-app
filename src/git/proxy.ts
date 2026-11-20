@@ -432,6 +432,12 @@ export function createGitProxy({ services, signer, ...options }: GitProxyOptions
         if (contentType !== `application/x-${service}-request` || !request.body)
           return await refuse("expected a git smart HTTP request", { status: 415 });
         encoding = request.headers.get("content-encoding")?.trim().toLowerCase();
+        // The proxy never decompresses: a fetch request body is forwarded as sent and counted
+        // compressed (`pushMaxBytes`), so its decompressed size is bounded only by the host.
+        // Git compresses large negotiation requests with gzip and nothing else; any other
+        // encoding is refused rather than handed to the host.
+        if (encoding && encoding !== "identity" && encoding !== "gzip")
+          return await refuse("unsupported request encoding", { status: 415 });
         if (isPush) {
           if (encoding && encoding !== "identity")
             return await refuse("compressed push requests are not supported", { status: 415 });
