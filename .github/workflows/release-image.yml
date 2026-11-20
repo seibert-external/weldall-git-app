@@ -29,7 +29,9 @@ on:
 
 concurrency:
   # One release at a time: the floating-tag plan is made before the approval wait, so two
-  # pending releases must not run side by side.
+  # pending releases must not run side by side. This is not a queue: GitHub keeps one running
+  # and one pending run per group, and a newer run cancels the pending one, which then publishes
+  # nothing. Re-run a cancelled release manually (workflow_dispatch, its tag, publish ticked).
   group: release-image
   cancel-in-progress: false
 

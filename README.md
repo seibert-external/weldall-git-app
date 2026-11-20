@@ -267,6 +267,8 @@ CI (`.github/workflows/ci.yml`) runs on every pull request and push to `main`: f
 
 A manual run (Actions, "Release Docker image", tag `vX.Y.Z`) builds and tests only; it publishes only with `publish` ticked, and then through the same environment approval.
 
+Runs are serialised, but they do not queue: GitHub keeps one running and at most one pending run of the workflow, so a third release published while one waits for approval cancels the pending one, which publishes nothing. Approve or reject each release before publishing the next; if one was cancelled, start it again with a manual run for its tag and `publish` ticked.
+
 What a repository administrator sets up once, before the first release (nothing here is created by the workflows):
 
 - **Environment `release`** (Settings, Environments) with **required reviewers**, and preferably "Prevent self-review" and deployment refs limited to `main` and tags `v*`. Without required reviewers anyone with write access could publish an image.
