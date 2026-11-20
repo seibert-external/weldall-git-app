@@ -48,6 +48,7 @@ export async function readGitHubBranchPullRequestState({
     path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/pulls?${query}`,
     method: "GET",
     token,
+    responseLimit: LIST_RESPONSE_LIMIT,
     signal,
   });
   if (response.status !== 200) throw unexpected(response);
@@ -139,6 +140,7 @@ const checkRunsResponse = z.object({
   ),
 });
 const combinedStatusResponse = z.object({
+  total_count: z.number().int().nonnegative().optional(),
   statuses: z.array(
     z.object({
       context: z.string(),
@@ -159,6 +161,10 @@ function parse<T extends z.ZodType>(schema: T, response: GitHubApiResponse): z.o
   if (!parsed.success) throw protocolError();
   return parsed.data;
 }
+
+/** Whether GitHub's `Link` header points at a further page. */
+const hasNextPage = (response: GitHubApiResponse) =>
+  /<[^>]*>\s*;\s*rel="?next"?/i.test(response.headers.get("link") ?? "");
 
 /** Branch names may contain `/`; each part is encoded on its own (an encoded `/` is refused). */
 const branchPath = (branch: string) => branch.split("/").map(segment).join("/");
@@ -482,7 +488,8 @@ export function createGitHubPullRequests(context: GitHubRepositoryContext) {
     );
     if (response.status === 403 && !rateLimited(response)) throw permissionMissing();
     if (response.status !== 200) throw unexpected(response);
-    return parse(z.array(reviewResponse), response).flatMap((review): PullRequestReview[] => {
+    const listed = parse(z.array(reviewResponse), response);
+    const reviews = listed.flatMap((review): PullRequestReview[] => {
       const state = reviewStates[review.state];
       // Pending reviews are drafts their author has not submitted.
       if (!state) return [];
@@ -496,6 +503,8 @@ export function createGitHubPullRequests(context: GitHubRepositoryContext) {
         },
       ];
     });
+    // GitHub lists the oldest reviews first; a further page holds the newest.
+    return { reviews, listed: listed.length, truncated: hasNextPage(response) };
   }
 
   async function readCheckRuns(token: string, commit: string, signal: AbortSignal) {
@@ -522,11 +531,16 @@ export function createGitHubPullRequests(context: GitHubRepositoryContext) {
     const response = await get(token, `/commits/${commit}/status?per_page=100`, signal);
     if (response.status === 403 && !rateLimited(response)) throw permissionMissing();
     if (response.status !== 200) throw unexpected(response);
-    return parse(combinedStatusResponse, response).statuses.map((status): PullRequestCheck => ({
-      name: status.context,
-      state: commitStatusState(status.state),
-      detailsUrl: status.target_url || null,
-    }));
+    const { total_count, statuses } = parse(combinedStatusResponse, response);
+    return {
+      total: Math.max(total_count ?? 0, statuses.length),
+      truncated: hasNextPage(response),
+      statuses: statuses.map((status): PullRequestCheck => ({
+        name: status.context,
+        state: commitStatusState(status.state),
+        detailsUrl: status.target_url || null,
+      })),
+    };
   }
 
   /**
@@ -617,14 +631,27 @@ export function createGitHubPullRequests(context: GitHubRepositoryContext) {
           code: "checks_truncated",
           message: `Only ${checkRuns.checks.length} of ${checkRuns.total} check runs are shown.`,
         });
+      if (statuses && (statuses.total > statuses.statuses.length || statuses.truncated))
+        warnings.push({
+          code: "statuses_truncated",
+          message:
+            statuses.total > statuses.statuses.length
+              ? `Only ${statuses.statuses.length} of ${statuses.total} commit statuses are shown.`
+              : `Only the first ${statuses.statuses.length} commit statuses are shown.`,
+        });
+      if (reviews?.truncated)
+        warnings.push({
+          code: "reviews_truncated",
+          message: `Only the oldest ${reviews.listed} reviews were read; newer reviews are not shown.`,
+        });
       pullRequest = {
         number: pull.number,
         webUrl: webUrl(pull.number),
         state: pull.state === "open" ? "open" : pull.merged_at ? "merged" : "closed",
         headBranch: pull.head.ref,
         headCommit: commit,
-        reviews: reviews ?? [],
-        checks: [...(checkRuns?.checks ?? []), ...(statuses ?? [])],
+        reviews: reviews?.reviews ?? [],
+        checks: [...(checkRuns?.checks ?? []), ...(statuses?.statuses ?? [])],
       };
     }
     const links = await readPart(

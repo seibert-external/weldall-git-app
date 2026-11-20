@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseGitHubAppConfiguration } from "../src/hosts/github/config.js";
 import { createGitHubAppHost, GITHUB_OPERATION_PERMISSIONS } from "../src/hosts/github/host.js";
+import { readGitHubBranchPullRequestState } from "../src/hosts/github/pull-requests.js";
 import { parseGitHubAppPrivateKey } from "../src/hosts/github/private-key.js";
 import { createInstallationTokenCache } from "../src/hosts/github/tokens.js";
 import { createCommitIdentityCache } from "../src/hosts/github/identity.js";
@@ -624,6 +625,38 @@ describe("reading the status from GitHub", () => {
     expect(status.warnings.map(({ code }) => code)).toEqual(["checks_truncated"]);
   });
 
+  it("warns when GitHub has more reviews and commit statuses than one page", async () => {
+    const next = (path: string) =>
+      `<https://api.github.com/repositories/1/${path}&page=2>; rel="next", <https://api.github.com/repositories/1/${path}&page=3>; rel="last"`;
+    mockGitHubPullRequests({
+      ...full,
+      reviews: { ...full.reviews, headers: { link: next("pulls/3/reviews?per_page=100") } },
+      statuses: {
+        body: {
+          state: "pending",
+          total_count: 140,
+          statuses: [{ context: "ci/build", state: "success", target_url: null }],
+        },
+        headers: { link: next("commits/x/status?per_page=100") },
+      },
+    });
+    const status = await host().readStatus(current, signal());
+    expect(status.pullRequest?.reviews).toHaveLength(2);
+    expect(status.warnings).toEqual([
+      { code: "statuses_truncated", message: "Only 1 of 140 commit statuses are shown." },
+      {
+        code: "reviews_truncated",
+        message: "Only the oldest 3 reviews were read; newer reviews are not shown.",
+      },
+    ]);
+  });
+
+  it("does not warn about reviews and statuses that fit on one page", async () => {
+    mockGitHubPullRequests(full);
+    const status = await host().readStatus(current, signal());
+    expect(status.warnings).toEqual([]);
+  });
+
   it("fails when GitHub cannot list the pull requests at all", async () => {
     vi.stubGlobal(
       "fetch",
@@ -646,5 +679,30 @@ describe("reading the status from GitHub", () => {
     await expect(host().readStatus(current, signal())).rejects.toMatchObject({
       code: "upstream_unavailable",
     });
+  });
+});
+
+describe("readGitHubBranchPullRequestState", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const read = () =>
+    readGitHubBranchPullRequestState({
+      apiBaseUrl: "https://api.github.com",
+      owner: "acme-apps",
+      repository: "app-expenses",
+      branch: head,
+      token: "ghs_" + "x".repeat(36),
+      signal: AbortSignal.timeout(5_000),
+    });
+
+  it("reads a list larger than a single object's response limit, like the other lists", async () => {
+    // GitHub's pull request objects are several KiB each; 100 of them exceed 64 KiB.
+    const pull = { state: "closed", merged_at: null, padding: "p".repeat(2_000) };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json([...Array.from({ length: 99 }, () => pull), { ...pull, state: "open" }]),
+      ),
+    );
+    await expect(read()).resolves.toBe("open");
   });
 });
