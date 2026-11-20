@@ -127,14 +127,17 @@ export function pullRequestTitle(value: string): string {
  * characters, are removed.
  */
 export function pullRequestBody(value: string, person: { id: string }): string {
-  const body = withoutMarkers(
-    withoutHiddenCharacters(withoutControls(value).slice(0, PULL_REQUEST_BODY_LIMIT)),
-  )
-    .split("\n")
-    .filter((line) => !imitatesTrigger(line))
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  let body = withoutHiddenCharacters(withoutControls(value).slice(0, PULL_REQUEST_BODY_LIMIT));
+  // Removing a marker can join a trigger line, and dropping a line can join a marker (`\s*` in the
+  // marker pattern spans line breaks), so both steps repeat until neither changes the text.
+  for (let previous = ""; previous !== body;) {
+    previous = body;
+    body = withoutMarkers(body)
+      .split("\n")
+      .filter((line) => !imitatesTrigger(line))
+      .join("\n");
+  }
+  body = body.replace(/\n{3,}/g, "\n\n").trim();
   const trigger = `${PUBLISH_TRIGGER_MARKER}\n${publishTriggerLine(person)}`;
   // The blank line keeps the rule from turning the trigger line into a heading.
   return body ? `${trigger}\n\n---\n\n${body}` : trigger;

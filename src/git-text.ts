@@ -25,7 +25,9 @@ export function truncateText(value: string, maximum: number): string {
  * variation selectors (U+FE00-FE0F, U+E0100-E01EF, Mongolian U+180B-180F), the combining
  * grapheme joiner and the Hangul fillers, which render as nothing. Visible letters of every
  * script stay. Such characters could carry hidden instructions to the agent or split a
- * credential so that redaction misses it.
+ * credential so that redaction misses it. This also drops joiners that change visible text:
+ * ZWJ/ZWNJ and VS16, so "❤️" becomes "❤", emoji sequences fall apart and Persian words written
+ * with ZWNJ join differently. Acceptable for text an agent reads.
  */
 const hiddenOrControl =
   /(?![\t\n])[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu;

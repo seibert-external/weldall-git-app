@@ -56,6 +56,20 @@ describe("pull request body", () => {
     expect(body.match(/weldall:published-by/gi)).toHaveLength(1);
   });
 
+  it("does not let a dropped trigger line join a marker across lines", () => {
+    const body = pullRequestBody(
+      "intro\n<!--\nPublished with Weldall\nweldall:published-by -->",
+      person,
+    );
+    expect(body.match(/weldall:published-by/gi)).toHaveLength(1);
+    expect(body.match(/published with weldall/gi)).toHaveLength(1);
+  });
+
+  it("does not let a removed marker join a trigger line", () => {
+    const body = pullRequestBody("Published with <!-- weldall:published-by -->Weldall", person);
+    expect(body).toBe(trigger);
+  });
+
   it("carries only the Weldall user id, no name or email", () => {
     expect(publishTriggerLine({ id: "u" })).toBe("Published with Weldall (Weldall user u).");
   });

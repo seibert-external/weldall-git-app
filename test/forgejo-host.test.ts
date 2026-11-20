@@ -458,7 +458,7 @@ describe("status", () => {
       { name: "ci/warn", state: "neutral", detailsUrl: null },
       { name: "ci/deploy", state: "neutral", detailsUrl: null },
       { name: "ci/infra", state: "failure", detailsUrl: null },
-      { name: "ci/future", state: "neutral", detailsUrl: null },
+      { name: "ci/future", state: "failure", detailsUrl: null },
       { name: "weldall/preview", state: "success", detailsUrl: "https://preview.example.com/" },
     ]);
   });

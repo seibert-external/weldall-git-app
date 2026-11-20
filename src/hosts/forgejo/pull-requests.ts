@@ -85,9 +85,9 @@ const reviewStates: Record<string, PullRequestReview["state"] | undefined> = {
 function statusState(status: string): PullRequestCheck["state"] {
   if (status === "success") return "success";
   if (status === "pending") return "pending";
-  if (status === "failure" || status === "error") return "failure";
-  // warning, skipped and anything new.
-  return "neutral";
+  if (status === "warning" || status === "skipped") return "neutral";
+  // failure, error and anything new (a later "cancelled" must not look harmless), as on GitHub.
+  return "failure";
 }
 
 const permissionMissing = () =>
