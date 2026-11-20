@@ -361,4 +361,29 @@ describe("creating a repository from a template", () => {
       ),
     ).rejects.toMatchObject({ code: "repository_not_private" });
   });
+
+  it("tells the administrator to add a repository outside the installation before registering it", async () => {
+    // Measured on GitHub (20.11.2026): with an installation on selected repositories, a repository
+    // created outside the App is not in it, and GitHub refuses a token for it with 422.
+    mockGitHub({ refusedNewRepositoryTokens: 1 });
+    await expect(
+      host().inspectExistingRepository({ name: "app-legacy" }, signal()),
+    ).rejects.toMatchObject({
+      code: "repository_unavailable",
+      status: 409,
+      message: expect.not.stringContaining("any more"),
+    });
+    mockGitHub({ refusedNewRepositoryTokens: 1 });
+    await expect(
+      host().inspectExistingRepository({ name: "app-legacy" }, signal()),
+    ).rejects.toThrow(/add the repository to the installation on GitHub, then register it again/);
+
+    mockGitHub({ refusedNewRepositoryTokens: 1 });
+    await expect(
+      host().createRepository(
+        { ...request, resume: { owner: "acme-apps", name: "app-expenses" } },
+        signal(),
+      ),
+    ).rejects.toThrow(/cannot access acme-apps\/app-expenses any more/);
+  });
 });

@@ -326,18 +326,23 @@ export function createGitHubRepositories({
     }
   }
 
-  /** Re-reads a repository an earlier attempt created; it must still be private. */
-  async function readExisting(name: string, signal: AbortSignal) {
+  /**
+   * Reads a repository that must already exist and be private: one an earlier attempt created
+   * (`resume`), or one an administrator registers (`register`), which the App never had to see
+   * before. With an installation on selected repositories, a repository created outside the App
+   * is not in the installation until an administrator adds it.
+   */
+  async function readExisting(name: string, purpose: "resume" | "register", signal: AbortSignal) {
+    const unavailable =
+      purpose === "register"
+        ? `The GitHub App cannot access ${label(name)}: the repository does not exist, or it is not in the App's installation. If the App is installed on selected repositories only, add the repository to the installation on GitHub, then register it again.`
+        : `The GitHub App cannot access ${label(name)} any more. An administrator must check whether the repository still exists and is in the App's installation.`;
     let token: string;
     try {
       token = await mint(name, GITHUB_REPOSITORY_PERMISSIONS.inspectRepository, signal);
     } catch (error) {
       if (error instanceof GitAppError && error.code === "token_refused")
-        throw new GitAppError(
-          "repository_unavailable",
-          `The GitHub App cannot access ${label(name)} any more. An administrator must check whether the repository still exists and is in the App's installation.`,
-          409,
-        );
+        throw new GitAppError("repository_unavailable", unavailable, 409);
       throw error;
     }
     const response = await githubApi({
@@ -351,7 +356,9 @@ export function createGitHubRepositories({
     if (response.status === 404)
       throw new GitAppError(
         "repository_unavailable",
-        `${label(name)} no longer exists on GitHub or the App lost access to it. An administrator must check the repository.`,
+        purpose === "register"
+          ? unavailable
+          : `${label(name)} no longer exists on GitHub or the App lost access to it. An administrator must check the repository.`,
         409,
       );
     throw unexpected(response);
@@ -448,7 +455,7 @@ export function createGitHubRepositories({
       signal: AbortSignal,
     ): Promise<ExistingRepository> {
       refuseTemplate(config.templates, organization, input.name);
-      const repository = await readExisting(input.name, signal);
+      const repository = await readExisting(input.name, "register", signal);
       const warnings = await checkBranchRules(repository.name, repository.default_branch, signal);
       await checkReviewerTeam(repository.name, signal);
       return {
@@ -471,7 +478,7 @@ export function createGitHubRepositories({
       )
         throw new GitAppError("invalid_target", "The repository to resume does not match.");
       const repository = input.resume
-        ? await readExisting(name, signal)
+        ? await readExisting(name, "resume", signal)
         : await generate({ template, name, description: input.description }, signal);
       const created: NewRepository = {
         repository: { owner: organization, name: repository.name, id: String(repository.id) },
